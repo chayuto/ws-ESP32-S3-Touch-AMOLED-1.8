@@ -6,6 +6,13 @@ lines yourself.
 
 Usage: `/monitor [seconds]` (default 14)
 
+The same recipe is packaged as a script — prefer it over retyping the inline python:
+
+```zsh
+~/.espressif/python_env/idf5.5_py3.14_env/bin/python \
+  .claude/skills/serial-capture/scripts/capture.py --seconds 20 --out /tmp/boot.log
+```
+
 ---
 
 ## The macOS DTR/RTS trap

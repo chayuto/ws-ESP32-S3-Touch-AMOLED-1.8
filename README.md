@@ -19,7 +19,7 @@ Full board notes, authoritative pinout, and hard-won rules live in [`CLAUDE.md`]
 | RTC | PCF85063 @ `0x51` |
 | IMU | QMI8658 6-axis accel + gyro @ `0x6b` |
 | Audio | ES8311 codec @ `0x18`, onboard mic + speaker amp |
-| I/O expander | TCA9554 @ `0x20` (display / touch power + reset) |
+| I/O expander | TCA9554 @ `0x20` (`EXIO0`–`EXIO7`; **not** in the display or touch path) |
 | Storage | microSD over SDMMC 1-bit |
 | Radio | Wi-Fi 4 (b/g/n) + BLE 5 |
 | USB | Native USB-Serial/JTAG (GPIO 19/20) |
@@ -82,7 +82,9 @@ I (710) app: UI drawn; tap the panel to see touch events here
 ws-ESP32-S3-Touch-AMOLED-1.8/
 ├── CLAUDE.md                 # authoritative board notes + critical rules
 ├── README.md                 # this file
-├── .claude/commands/         # /build /flash /monitor /hardware-specs /peripherals /restore-factory
+├── .claude/
+│   ├── commands/             # /build /flash /monitor /hardware-specs /peripherals /restore-factory
+│   └── skills/               # new-project, serial-capture
 ├── docs/
 │   ├── research/             # surveys, design + method docs
 │   └── internal/             # working notes (gitignored)
@@ -109,17 +111,31 @@ idf.py -C projects/bringup-01 -B /tmp/ws-amoled-build/bringup-01 -p /dev/cu.usbm
 ```
 
 Then read the serial output — **not** with `idf.py monitor`, which exits silently in
-non-TTY shells. Use the capture recipe in [`.claude/commands/monitor.md`](./.claude/commands/monitor.md).
+non-TTY shells:
+
+```zsh
+~/.espressif/python_env/idf5.5_py3.14_env/bin/python \
+  .claude/skills/serial-capture/scripts/capture.py --seconds 20
+```
+
+That script works around a macOS quirk: opening `/dev/cu.usbmodem*` asserts DTR and RTS,
+which are wired to GPIO0 and EN, dropping the board into download mode. See the
+`serial-capture` skill for the why and for the no-python alternative.
 
 ### New project
 
-1. `cp -r projects/01_project_template projects/<name>` — CMakeLists,
+1. `cp -R projects/01_project_template projects/<name>` — CMakeLists,
    `main/idf_component.yml`, `partitions.csv` and `sdkconfig.defaults` are board-correct.
    (Start from `bringup-01` instead if you want no display stack.)
-2. Rename the project in the top-level `CMakeLists.txt`.
-3. Replace `build_ui()` in `main/app_main.c`.
-4. Keep secrets out of `sdkconfig.defaults` — put them in `sdkconfig.defaults.local`
+2. `rm -rf sdkconfig sdkconfig.old dependencies.lock managed_components build` in the copy.
+   A stale `sdkconfig` silently overrides anything you change in `sdkconfig.defaults`.
+3. Rename the project in the top-level `CMakeLists.txt`.
+4. Replace `build_ui()` in `main/app_main.c`.
+5. Keep secrets out of `sdkconfig.defaults` — put them in `sdkconfig.defaults.local`
    (gitignored). See "Credential pattern" in `CLAUDE.md`.
+
+The `new-project` skill in `.claude/skills/` walks the same steps with the reasoning
+behind each one.
 
 ## Reference material
 

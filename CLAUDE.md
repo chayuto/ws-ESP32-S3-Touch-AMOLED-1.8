@@ -5,6 +5,9 @@ Workspace for the **Waveshare ESP32-S3-Touch-AMOLED-1.8** (SKU 29957; `-EN` vari
 A 1.8" 368×448 QSPI AMOLED touch board built on the ESP32-S3R8, with AXP2101 PMU,
 PCF85063 RTC, QMI8658 IMU, ES8311 audio, TCA9554 I/O expander, and a microSD slot.
 
+Everything below was checked against this physical unit. Where a claim is inferred
+rather than observed, it says so.
+
 ## This unit (verified on hardware 2026-09-05)
 
 **It is a V2 board.** The board ships in two revisions and they differ in the two
@@ -23,16 +26,15 @@ Identity of this specific board:
 - Wi-Fi STA MAC `90:70:69:fe:84:30`
 - Serial port on this host: `/dev/cu.usbmodem3101` (native USB-Serial/JTAG; number is per-cable)
 - Shipped factory app: `esp-brookesia`, built 2026-05-27 against IDF v5.5.4-dirty
+- As-shipped 16 MB flash image backed up to `ref/firmware/factory-backup-16MB-20260905.bin`
 
 ## Board Facts (verified from boot logs, not the datasheet)
 
 - **Chip:** ESP32-S3 (QFN56) rev **v0.2**, efuse block rev v1.4, dual-core Xtensa LX7
 - **CPU:** 240 MHz — **only if you set it**; the IDF default is 160 MHz (see Critical Rules)
 - **PSRAM:** 8 MB octal, in-package (AP Memory gen-3, 64 Mbit, 80 MHz, 3V, 10-cycle
-  fixed read latency). Boot log: `Adding pool of 8192K of PSRAM memory to heap allocator`;
-  8,386,192 bytes free to the heap after boot.
+  fixed read latency). Boot log: `Adding pool of 8192K of PSRAM memory to heap allocator`.
 - **Flash:** 16 MB external NOR, **QIO @ 80 MHz**, 3.3 V (eFuse says quad, 4 data lines)
-- **Internal SRAM after boot:** ~372 KB free (326 KiB + 21 KiB + 32 KiB DRAM + 7 KiB RTCRAM)
 - **USB:** native USB-Serial/JTAG (GPIO 19/20) — enumerates as `/dev/cu.usbmodem*` directly
 - **Radio:** Wi-Fi 4 (b/g/n) + BLE 5. **No 802.15.4** (unlike the C6 sibling board)
 - **Display:** 1.8" AMOLED, 368×448, RGB565, QSPI on SPI2_HOST. Self-emitting —
@@ -53,27 +55,33 @@ Verified against the BSP header
 | Speaker amplifier enable | 46 |
 | LCD QSPI PCLK / CS | 11 / 12 |
 | LCD QSPI D0 / D1 / D2 / D3 | 4 / 5 / 6 / 7 |
-| LCD RST / backlight / touch RST | **none** — `GPIO_NUM_NC` (AMOLED; reset via I/O expander) |
+| LCD RST / backlight / touch RST | **none** — all three are `GPIO_NUM_NC` |
 | Touch INT | 21 |
 | SD card CMD / CLK / D0 (SDMMC 1-bit) | 1 / 2 / 3 |
 | USB D- / D+ | 19 / 20 |
+
+Free for application use: whatever the board does not claim above. Check the schematic
+(`ref/schematic/`) before committing a pin — several are brought out to the FPC/pad
+positions rather than being truly unused.
 
 ## I²C Bus — what actually answers
 
 Single shared bus, **SDA = GPIO 15, SCL = GPIO 14**, 400 kHz by default
 (`CONFIG_BSP_I2C_FAST_MODE=y`). Live scan from this unit:
 
-| Address | Device |
-|---|---|
-| `0x15` | CST820 capacitive touch (**V2**; a V1 board answers at `0x38` instead) |
-| `0x18` | ES8311 audio codec |
-| `0x20` | TCA9554 I/O expander |
-| `0x34` | AXP2101 PMU — `CHIP_ID` (reg `0x03`) = `0x4a` |
-| `0x51` | PCF85063 RTC |
-| `0x6b` | QMI8658 6-axis IMU — `WHO_AM_I` (reg `0x00`) = `0x05` |
+| Address | Device | Identity check |
+|---|---|---|
+| `0x15` | CST820 capacitive touch (**V2**; a V1 board answers at `0x38` instead) | driver logs `IC id: 183` |
+| `0x18` | ES8311 audio codec | |
+| `0x20` | TCA9554 I/O expander | |
+| `0x34` | AXP2101 PMU | reg `0x03` `CHIP_ID` = `0x4a` |
+| `0x51` | PCF85063 RTC | |
+| `0x6b` | QMI8658 6-axis IMU | reg `0x00` `WHO_AM_I` = `0x05` |
 
 The BSP logs `Please check pull-up resistances...` on init. That warning is expected —
-the board has hardware pull-ups and every device above still enumerates.
+the board has hardware pull-ups and every device above still enumerates. To silence it
+across bring-up, `esp_log_level_set("i2c.master", ESP_LOG_ERROR)` before
+`bsp_display_start()` and restore after; `01_project_template` does exactly this.
 
 ## Repo Layout
 
@@ -81,13 +89,16 @@ the board has hardware pull-ups and every device above still enumerates.
 ws-ESP32-S3-Touch-AMOLED-1.8/
 ├── CLAUDE.md                 # this file — authoritative board notes
 ├── README.md
-├── .claude/commands/         # /build /flash /monitor /hardware-specs /peripherals /restore-factory
-├── .gitignore                # excludes /ref/, build/, managed_components/
+├── .claude/
+│   ├── commands/             # /build /flash /monitor /hardware-specs /peripherals /restore-factory
+│   └── skills/               # new-project, serial-capture
+├── .gitignore                # excludes /ref/, build/, sdkconfig, managed_components/
 ├── docs/
-│   ├── research/             # public-info-sourced surveys, design + method docs
+│   ├── research/             # lab notes and surveys (bringup-20260905.md is the founding one)
 │   └── internal/             # working notes (gitignored)
 ├── projects/
-│   └── bringup-01/           # first-boot validation: chip report + I²C scan + revision detect
+│   ├── bringup-01/           # first-boot validation: chip report + I²C scan + revision detect
+│   └── 01_project_template/  # copy this to start anything: BSP + display + touch + LVGL
 └── ref/                      # vendor material (gitignored, ~650 MB)
     ├── datasheets/           # ESP32-S3, AXP2101, QMI8658C, PCF85063A, ES8311, CO5300, SH8601A0, FT3168
     ├── schematic/            # ESP32-S3-Touch-AMOLED-1.8-schematic.pdf
@@ -95,6 +106,15 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
     ├── firmware/             # full 16 MB backup of the as-shipped flash
     └── demo/ESP32-S3-Touch-AMOLED-1.8/   # official vendor repo clone
 ```
+
+`ref/` is **not** in git — it is reproducible from the URLs listed in `ref/README.md`.
+
+## Projects
+
+| Project | What it is | Hardware-verified |
+|---|---|---|
+| `bringup-01` | Chip report, I²C census, V1/V2 revision detection. No display. | yes — full output in its README |
+| `01_project_template` | The scaffold. BSP init, display, touch, LVGL 9 screen with a tap counter, heap heartbeat. | yes — display, touch registration, 240 MHz, stable heap |
 
 ## ESP-IDF Environment
 
@@ -106,12 +126,90 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 
 ```zsh
 . ~/esp/esp-idf/export.sh
-idf.py -C projects/bringup-01 -B /tmp/ws-amoled-build/bringup-01 build
-idf.py -C projects/bringup-01 -B /tmp/ws-amoled-build/bringup-01 -p /dev/cu.usbmodem3101 flash
+idf.py -C projects/<name> -B /tmp/ws-amoled-build/<name> build
+idf.py -C projects/<name> -B /tmp/ws-amoled-build/<name> -p /dev/cu.usbmodem3101 flash
 ```
 
 Out-of-tree build dirs (`-B /tmp/...`) keep vendor clones and the repo clean.
-`idf.py monitor` does **not** work in non-TTY shells — see `/monitor`.
+`idf.py monitor` does **not** work in non-TTY shells — see `/monitor` for the pyserial
+recipe and the macOS DTR/RTS trap it works around.
+
+Verify a flash without reflashing:
+
+```zsh
+cd /tmp/ws-amoled-build/<name>
+esptool --chip esp32s3 -p /dev/cu.usbmodem3101 -b 921600 verify_flash @flash_args
+```
+
+## Starting a New Project
+
+Copy the template; do not start from a vendor example.
+
+```zsh
+cp -R projects/01_project_template projects/<name>
+cd projects/<name>
+rm -rf sdkconfig sdkconfig.old dependencies.lock managed_components build
+sed -i '' 's/project(01_project_template)/project(<name>)/' CMakeLists.txt
+```
+
+Then edit `main/app_main.c`, and check these before the first build:
+
+- **`sdkconfig.defaults`** — the committed baseline. It already sets target, QIO/16 MB,
+  octal PSRAM @ 80 MHz, **240 MHz CPU**, USB-Serial/JTAG console, 1 ms tick, the custom
+  partition table, and three Montserrat fonts. Add to it; do not drop lines without a reason.
+- **`partitions.csv`** — `factory` 4 MB + `storage` 4 MB SPIFFS. An LVGL app overflows the
+  default 1 MB app partition, which is why this file exists. Resize if your app needs it.
+- **`main/idf_component.yml`** — pins `waveshare/esp32_s3_touch_amoled_1_8 ^2.0.3` as a
+  public dependency. That one line pulls in the panel driver, touch driver, LVGL and
+  `esp_lvgl_port`.
+- **Secrets** go in `sdkconfig.defaults.local` (gitignored) — see Credential pattern below.
+
+If you change `sdkconfig.defaults` on a project that has already been built, **delete the
+generated `sdkconfig`** first. Otherwise the change is silently ignored — this is how the
+160 MHz boot went unnoticed the first time.
+
+## Conventions
+
+### Commits
+
+- **Single author: the repo owner.** No `Co-Authored-By:` trailers, ever.
+- **No AI or tool attribution** anywhere in the message — no "Generated with", no
+  assistant name, no session link.
+- Subject line in the imperative, under ~72 characters, saying what changed and why it
+  matters: `Add 01_project_template: display + touch + LVGL, and fix the TCA9554 claim`.
+- Body in prose, wrapped at ~80. Say what was verified on hardware and what was not.
+  A commit that claims a peripheral works should point at the log that proves it.
+- Never commit `sdkconfig`, `dependencies.lock`, `managed_components/`, build output,
+  anything under `ref/`, or a `sdkconfig.defaults.local`. `.gitignore` covers all of these
+  — if `git status` shows one, something is wrong, so stop rather than force-add.
+
+### Pull requests
+
+- Same rules: no AI or tool attribution, no generated-by footer, no session links.
+- Describe the hardware state the change was verified against — board revision, IDF
+  version, which project was flashed.
+
+### Documentation
+
+- `CLAUDE.md` is the board's authoritative record. Anything learned from the hardware
+  belongs here, and a correction replaces the wrong claim rather than sitting beside it.
+- Distinguish *observed* from *inferred*. If a number came from a boot log, say so; if it
+  came from a datasheet and was never checked, mark it.
+- `docs/research/` holds dated lab notes — the raw evidence a `CLAUDE.md` claim rests on.
+- Keep "Not Yet Verified on Hardware" at the bottom of this file honest and current. It is
+  the most useful section here, because it is the one that stops false assumptions.
+
+### Skills and commands
+
+`.claude/skills/` holds the workflows worth invoking by name:
+
+| Skill | Use it for |
+|---|---|
+| `new-project` | Scaffolding a new project from `01_project_template` with the verified board config |
+| `serial-capture` | Reading the console without dropping the board into download mode |
+
+`.claude/commands/` holds the slash-command references: `/build`, `/flash`, `/monitor`,
+`/hardware-specs`, `/peripherals`, `/restore-factory`.
 
 ## Critical Rules
 
@@ -134,6 +232,9 @@ Out-of-tree build dirs (`-B /tmp/...`) keep vendor clones and the repo clean.
   in the same area); what each drives is not yet established. Call `bsp_io_expander_init()`
   only when you need those lines. Do **not** carry over the C6 sibling's rule that the
   expander gates the display and touch rails — true on that board, not this one.
+- **Touch LVGL only under the lock.** `bsp_display_lock(timeout_ms)` /
+  `bsp_display_unlock()` around every LVGL call made outside an LVGL event callback.
+  The LVGL task runs on its own; unlocked access from another task will corrupt it.
 - **The AXP2101 owns the power rails.** Misconfiguring it can brown out the display or the
   card slot. Read `ref/datasheets/AXP2101.pdf` before changing any rail, and prefer the
   vendor example `90_axp2101_pmu` as the reference sequence.
@@ -142,8 +243,29 @@ Out-of-tree build dirs (`-B /tmp/...`) keep vendor clones and the repo clean.
 - **PSRAM is 8 MB octal** — full framebuffers and LVGL buffers belong there.
   368×448×2 bytes = 330 KB per full-screen RGB565 buffer, which does not fit comfortably
   in internal RAM.
-- **Restoring the shipped firmware is possible** — the as-shipped 16 MB image is backed up
-  at `ref/firmware/factory-backup-16MB-20260905.bin`. See `/restore-factory`.
+- **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
+  backup before any flash that you cannot otherwise undo.
+
+## Memory Budget (measured, not estimated)
+
+| After boot | Internal free | PSRAM free |
+|---|---|---|
+| `bringup-01` — no display | 372,359 B | 8,385,100 B |
+| `01_project_template` — panel + touch + LVGL, idle | 243,155 B | 8,237,204 B |
+
+So the display stack costs roughly **129 KB internal and 149 KB PSRAM**. Internal RAM is
+the scarce resource; anything large goes to PSRAM with `MALLOC_CAP_SPIRAM`. Both figures
+above were flat across repeated 10-second heartbeats — a drifting number means a leak.
+
+## Expected log lines (a healthy boot)
+
+Do not chase these:
+
+- `W (…) i2c.master: Please check pull-up resistances…` — hardware pull-ups exist; benign.
+- `W (…) co5300_spi: The 3Ah command has been used and will be overwritten by external
+  initialization sequence` — the BSP supplies its own init list including pixel format.
+
+Anything else at `W` or above on a clean boot is worth reading.
 
 ## Credential pattern
 
@@ -174,6 +296,8 @@ idf.py -C projects/<name> -B <build> \
 | `90_axp2101_pmu`, `91_pcf85063_rtc`, `92_qmi8658_imu` | Per-peripheral references |
 
 Arduino sets live in `examples/arduino/` (V1) and `examples/arduino-v2/` (V2).
+Vendor `sdkconfig.defaults` files are **not** a good baseline — they omit the CPU
+frequency and the partition table. Use ours.
 
 ## Differences from Sibling Repos
 
@@ -191,3 +315,17 @@ Arduino sets live in `examples/arduino/` (V1) and `examples/arduino-v2/` (V2).
 The C6 board is the closest relative — same panel size and resolution, same PMU/RTC/IMU
 family — but a different display controller, different pins, and a single RISC-V core.
 Port code from it by concept, never by pin number.
+
+## Not Yet Verified on Hardware
+
+Honest list, so nobody builds on an assumption:
+
+- **Touch coordinates.** The CST820 is found and the LVGL indev is registered, but no
+  physical tap has been logged. Flash `01_project_template` and tap; it prints
+  `touch #N at x= y=`.
+- **Audio** — ES8311 answers on I²C; no playback or capture attempted.
+- **microSD** — no card mounted yet.
+- **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
+- **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
+- **Battery operation** — never run off the MX1.25 connector.
+- **What the TCA9554 lines actually drive.**

@@ -1,7 +1,7 @@
 # Peripheral cookbook — ESP32-S3-Touch-AMOLED-1.8
 
 Use the BSP component `waveshare/esp32_s3_touch_amoled_1_8` for anything nontrivial. It
-hides the TCA9554 power-gating, the I²C bus setup, the QSPI panel sequence, and the
+hides the I²C bus setup, the QSPI panel sequence, the CO5300 init command list, and the
 touch-controller auto-detect.
 
 ## Dependency line
