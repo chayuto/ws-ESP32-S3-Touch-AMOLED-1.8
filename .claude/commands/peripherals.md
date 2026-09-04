@@ -21,7 +21,6 @@ dependencies:
 #include "bsp/esp-bsp.h"
 
 bsp_i2c_init();            // GPIO 15/14, shared by all six I2C devices
-bsp_io_expander_init();    // TCA9554 @ 0x20 — gates display + touch power/reset rails
 
 // then, as needed:
 lv_display_t *disp = bsp_display_start();     // panel + touch + LVGL port, all in one
@@ -36,8 +35,13 @@ bsp_sdcard_mount();        // -> /sdcard, SDMMC 1-bit
 bsp_spiffs_mount();        // -> /spiffs, partition label "storage"
 ```
 
-`bsp_io_expander_init()` before display or touch. Skipping it leaves those rails off and
-the panel simply never comes up.
+`bsp_display_start()` calls `bsp_i2c_init()` itself, so the explicit call above is only
+needed when you want the bus up before the display.
+
+**The TCA9554 is not part of this sequence.** `bsp_io_expander_init()` exists but the BSP
+never calls it, and `01_project_template` brings up panel and touch without it. Call it
+only when you need the `EXIO0`–`EXIO7` lines. The C6 sibling board *does* gate display and
+touch power through its expander; this board does not.
 
 ## Full BSP API
 

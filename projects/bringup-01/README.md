@@ -85,9 +85,9 @@ booted at 160 MHz.
   present and all six devices enumerate.
 - The scan skips reserved addresses (below `0x08`, above `0x77`).
 - This program does **not** initialise the display. It deliberately stops at the I²C
-  layer so that a bus or power fault is diagnosed before the panel is in the picture.
-  Note that the touch rail is gated by the TCA9554, so on a board where the expander has
-  not been configured, touch may not answer until the display is brought up.
+  layer so a bus or power fault is diagnosed before the panel is in the picture. Touch
+  still answers at `0x15` from a cold boot — the touch controller is not gated behind
+  display bring-up on this board.
 
 ## Use as a scaffold
 

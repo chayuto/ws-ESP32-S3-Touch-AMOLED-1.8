@@ -60,6 +60,22 @@ AXP2101 CHIP_ID  = 0x4a
 V2: CST820 touch @ 0x15  =>  CO5300 display controller
 ```
 
+### [`projects/01_project_template`](./projects/01_project_template/) — copy this to start
+
+Brings up the whole display stack in one call — CO5300 QSPI panel, CST820 touch,
+LVGL 9.5 — and draws a tappable screen. Touches are logged to serial as well as shown,
+so it can be verified without looking at the panel.
+
+**Status: verified on hardware 2026-09-05.**
+
+```
+I (460) co5300_spi: LCD panel create success, version: 2.1.0
+I (666) ESP32-S3-Touch-AMOLED-1.8: Touch CST816S 0x15 found
+I (668) CST816S: IC id: 183
+I (670) app: display up: 368x448, touch indev registered
+I (710) app: UI drawn; tap the panel to see touch events here
+```
+
 ## Repo layout
 
 ```
@@ -71,7 +87,8 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 │   ├── research/             # surveys, design + method docs
 │   └── internal/             # working notes (gitignored)
 ├── projects/
-│   └── bringup-01/           # first-boot validation
+│   ├── bringup-01/           # first-boot validation
+│   └── 01_project_template/  # display + touch + LVGL starting point
 └── ref/                      # vendor docs + vendor clone (gitignored, ~650 MB)
     ├── datasheets/  schematic/  wiki/  firmware/  demo/
 ```
@@ -96,10 +113,12 @@ non-TTY shells. Use the capture recipe in [`.claude/commands/monitor.md`](./.cla
 
 ### New project
 
-1. Copy `projects/bringup-01/` as a scaffold (CMakeLists + `main/idf_component.yml` +
-   `sdkconfig.defaults` are all board-correct).
+1. `cp -r projects/01_project_template projects/<name>` — CMakeLists,
+   `main/idf_component.yml`, `partitions.csv` and `sdkconfig.defaults` are board-correct.
+   (Start from `bringup-01` instead if you want no display stack.)
 2. Rename the project in the top-level `CMakeLists.txt`.
-3. Keep secrets out of `sdkconfig.defaults` — put them in `sdkconfig.defaults.local`
+3. Replace `build_ui()` in `main/app_main.c`.
+4. Keep secrets out of `sdkconfig.defaults` — put them in `sdkconfig.defaults.local`
    (gitignored). See "Credential pattern" in `CLAUDE.md`.
 
 ## Reference material

@@ -1,0 +1,32 @@
+# Board: Waveshare ESP32-S3-Touch-AMOLED-1.8 (ESP32-S3R8, 16 MB quad flash, 8 MB OPI PSRAM)
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash: 16 MB, QIO. The eFuse on this unit reports quad (4 data lines).
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# PSRAM: 8 MB octal, in-package, 80 MHz. LVGL draw buffers live here
+# (the BSP sets buff_spiram = true) — 368x448 RGB565 is 330 KB per full frame.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Full 240 MHz. Without this ESP-IDF boots the S3 at 160 MHz — the vendor's own
+# 00_board_check defaults omit it, which cost us a confused first boot.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Console over the native USB-Serial/JTAG peripheral (GPIO 19/20).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# 1 ms tick keeps LVGL's animation and input timing smooth.
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# An LVGL app overflows the default 1 MB app partition.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Fonts used by this template.
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y

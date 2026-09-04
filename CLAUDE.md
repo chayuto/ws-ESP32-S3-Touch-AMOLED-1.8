@@ -125,8 +125,15 @@ Out-of-tree build dirs (`-B /tmp/...`) keep vendor clones and the repo clean.
   ever meet a V1 unit, the display path needs `esp_lcd_sh8601`, not `esp_lcd_co5300`.
 - **There is no backlight GPIO.** `BSP_LCD_BACKLIGHT`, `BSP_LCD_RST` and `BSP_LCD_TOUCH_RST`
   are all `GPIO_NUM_NC`. Brightness goes through `bsp_display_brightness_set()`, which
-  writes a display-controller register. Reset lines run through the TCA9554.
-- **`bsp_io_expander_init()` before display or touch** — the TCA9554 gates their power rails.
+  writes a display-controller register. The panel is driven with no reset GPIO at all.
+- **The TCA9554 is not in the display or touch path.** It sits at `0x20` and the BSP
+  exposes `bsp_io_expander_init()`, but the BSP never calls it: `bsp_display_start()`
+  brings up the panel and touch without it — verified by `01_project_template`, which
+  never touches the expander and still gets a working display and a registered indev.
+  Its eight lines are labelled `EXIO0`–`EXIO7` on the schematic (a `DSI_PWR_EN` net sits
+  in the same area); what each drives is not yet established. Call `bsp_io_expander_init()`
+  only when you need those lines. Do **not** carry over the C6 sibling's rule that the
+  expander gates the display and touch rails — true on that board, not this one.
 - **The AXP2101 owns the power rails.** Misconfiguring it can brown out the display or the
   card slot. Read `ref/datasheets/AXP2101.pdf` before changing any rail, and prefer the
   vendor example `90_axp2101_pmu` as the reference sequence.

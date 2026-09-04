@@ -70,13 +70,14 @@ hardware pull-ups and all devices enumerate.
 
 - Host: `SPI2_HOST`. Resolution 368×448, RGB565, 16 bpp, RGB element order, little-endian.
 - **Brightness is a controller register**, not a PWM pin: `bsp_display_brightness_set(pct)`.
-- Reset lines run through the TCA9554, so `bsp_io_expander_init()` must come first.
+- The panel comes up with no reset GPIO and no expander involvement — see the TCA9554 note below.
 
 ## Touch
 
 - INT on **GPIO 21**. No reset GPIO (`BSP_LCD_TOUCH_RST` is `GPIO_NUM_NC`).
 - BSP probes CST816S's address first, then FT5x06, and picks the driver that answers.
-  The CST820 is register-compatible with the CST816S driver.
+  The CST820 is register-compatible with the CST816S driver; on this unit the BSP logs
+  `Touch CST816S 0x15 found` and the driver reports `IC id: 183`.
 - The CST816S path applies an X gap of `0x10` (16 px) — the panel's active area is offset.
 
 ## Audio (ES8311)
@@ -112,6 +113,13 @@ native SDMMC host and must use SPI — this board uses the real SDMMC peripheral
 - **PCF85063 RTC** has its own backup-battery pads.
 
 ## Other BSP capabilities
+
+The **TCA9554 at `0x20` is not used by the BSP's display or touch paths.**
+`bsp_io_expander_init()` exists but nothing in the BSP calls it, and
+`01_project_template` brings up panel and touch without it. Its lines are labelled
+`EXIO0`–`EXIO7` on the schematic; per-pin function is not yet established. On the C6
+sibling board the expander *does* gate display and touch power — do not carry that
+assumption across.
 
 `BSP_CAPS_BUTTONS` is **0** — there is no user button exposed through the BSP.
 `BSP_CAPS_IMU` is **0** — the QMI8658 is on the bus but the BSP provides no driver for it;
