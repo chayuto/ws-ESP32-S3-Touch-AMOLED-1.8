@@ -31,17 +31,30 @@ Use the system python and you get `ModuleNotFoundError: serial` — pyserial liv
 the IDF venv.
 
 Useful flags: `--port` (the `usbmodem` number changes per cable — `ls /dev/cu.usbmodem*`),
-`--seconds`, `--no-reset` to attach to a running app without disturbing it.
+`--seconds`, `--out`.
 
-## Attach without resetting, no python
+**`--no-reset` does not do what its name suggests.** It skips the deliberate reset pulse,
+but macOS resets the board on `open()` regardless — verified on hardware. Every pyserial
+capture therefore starts from a fresh boot and **wipes accumulated run state**: counters,
+uptime, anything the app has been keeping. If you need to observe a running app, use the
+next recipe instead.
+
+## Attach without resetting — the only way that actually works
 
 ```zsh
 stty -f /dev/cu.usbmodem3101 115200 -hupcl
-dd if=/dev/cu.usbmodem3101 bs=1 count=4000 2>/dev/null
+dd if=/dev/cu.usbmodem3101 of=/tmp/tap.log bs=1 count=100000 2>/dev/null &
+# ... interact with the board ...
+pkill -f 'dd if=/dev/cu.usbmodem3101'; cat /tmp/tap.log
 ```
 
-`-hupcl` stops the close from resetting the board. You will only see output produced
-while attached — no boot banner. Good for watching a heartbeat or catching a tap.
+`dd` opens below the modem-control layer and `-hupcl` stops the close from resetting.
+Confirmed on hardware: timestamps continue from the running boot (`I (40712)` → `I (90712)`)
+instead of restarting at `I (454)`, so the app keeps its state.
+
+You see only output produced while attached — no boot banner. This is the recipe for
+anything involving live interaction: watching a heartbeat, catching a tap, confirming a
+counter advanced. Background it so you can interact with the board while it records.
 
 ## Reading the result
 

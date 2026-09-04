@@ -7,6 +7,12 @@ Run with the ESP-IDF venv python, which has pyserial:
 Why this exists: opening /dev/cu.usbmodem* on macOS asserts DTR and RTS, which on
 this board are wired to GPIO0 and EN. A naive open() drops the chip into download
 mode and you capture nothing. Both lines must be deasserted BEFORE open().
+
+Limitation, verified on hardware 2026-09-05: deasserting them avoids download mode
+but does NOT avoid the reset. Every open() through pyserial restarts the app, so
+this script always gives you a fresh boot and always destroys accumulated run state
+(counters, uptime). To observe a running app without disturbing it, use the stty/dd
+recipe in SKILL.md, which opens below the modem-control layer.
 """
 import argparse
 import sys
@@ -23,8 +29,10 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=20.0,
                     help="how long to capture for")
     ap.add_argument("--no-reset", action="store_true",
-                    help="attach to the running app instead of resetting it; "
-                         "you will miss the boot banner")
+                    help="skip the deliberate reset pulse. NOTE: this does NOT give you a "
+                         "non-resetting attach — macOS still resets the board on open(). "
+                         "Verified on hardware. For a true attach, use the stty/dd recipe "
+                         "in SKILL.md.")
     ap.add_argument("--out", default="-",
                     help="write to this file instead of stdout")
     args = ap.parse_args()

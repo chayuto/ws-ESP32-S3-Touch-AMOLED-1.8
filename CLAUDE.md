@@ -321,8 +321,10 @@ Port code from it by concept, never by pin number.
 Honest list, so nobody builds on an assumption:
 
 - **Touch coordinates.** The CST820 is found and the LVGL indev is registered, but no
-  physical tap has been logged. Flash `01_project_template` and tap; it prints
-  `touch #N at x= y=`.
+  physical tap has been logged. `01_project_template` prints `touch #N at x= y=` on tap
+  and carries the running total in its heartbeat. Use the **stty/dd** attach from the
+  `serial-capture` skill, not the pyserial script — a pyserial open resets the board and
+  zeroes the counter, which is what defeated the first two attempts.
 - **Audio** — ES8311 answers on I²C; no playback or capture attempted.
 - **microSD** — no card mounted yet.
 - **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
