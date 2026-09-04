@@ -1,0 +1,42 @@
+# Vendor reference material — datasheets, schematics, wiki snapshot, vendor
+# git clones, factory firmware backups. Large (~600 MB+) and vendor-licensed.
+/ref/
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+managed_components/
+
+# Credential overlay. `sdkconfig.defaults` is committed (no secrets);
+# real Wi-Fi / API creds go in this overlay, which is never committed.
+# See CLAUDE.md "Credential pattern".
+projects/*/sdkconfig.defaults.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Claude Code runtime state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Personal drafts, anything not for publication
+docs/private/
+
+# Internal working notes (plans, todos, audits) — kept local.
+docs/internal/
+
+# Device logs and captures
+logs/
+projects/*/logs/

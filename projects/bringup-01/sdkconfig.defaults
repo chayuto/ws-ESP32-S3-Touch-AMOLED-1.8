@@ -1,0 +1,19 @@
+# Board: Waveshare ESP32-S3-Touch-AMOLED-1.8 (ESP32-S3R8, 16 MB quad flash, 8 MB OPI PSRAM)
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash: 16 MB, QIO. The eFuse says quad (4 data lines) on this unit.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# PSRAM: 8 MB octal (in-package on the S3R8), 80 MHz.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Console over the native USB-Serial/JTAG peripheral (GPIO 19/20).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Run the LX7 cores at full speed. Without this the default is 160 MHz —
+# verified on 2026-09-05: the first bringup boot logged `cpu freq: 160000000 Hz`.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
