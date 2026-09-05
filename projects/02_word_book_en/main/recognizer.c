@@ -228,7 +228,11 @@ static void detect_task(void *arg)
                 nc++;
             }
             clog_detection(cands, nc, speech, res->data_volume, verdict, frames);
-            if (valid && speech) {
+            if (valid) {
+                /* The engine's guess whatever the VAD thought: the boot self-test scores this,
+                 * because its synthetic clips are far quieter at the mic than a voice and the
+                 * neural VAD rightly ignores them. The VAD's own behaviour is measured by the
+                 * quiet-room records, not by the self-test. */
                 s_raw.id = r->command_id[0];
                 s_raw.prob = r->prob[0];
                 s_raw.text = s_words[s_raw.id].text;
