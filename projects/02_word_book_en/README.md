@@ -65,6 +65,24 @@ mono WAV, and writes `words.json`. Needs Pillow; uses `afconvert` for audio on m
 A word with no photo shows as a large text card. A word with no prompt gets the chime
 only. Up to 32 words.
 
+### The card can come and go
+
+There is no card-detect line on this board, so `main/sdcard.c` polls: a mount attempt
+every 5 s while absent (~27 ms, logs muted), a CMD13 status check while present. What
+happens in each case:
+
+| Situation | Behaviour |
+|---|---|
+| No card at boot | Built-in 8 words, text cards, chime. Keeps checking. |
+| Card inserted later | `words.json` loaded. Same words as now → photos and prompts become available. Different words → the recogniser's vocabulary is **swapped live**, no reboot; the swap is done by the detect task at a safe point. |
+| Card present but no `book/words.json` | Current words kept; text cards. |
+| Card removed while running | Current words **kept** (the child's words keep working), text cards and chime until it returns. A failed photo or prompt read triggers an immediate re-check rather than waiting for the next poll. |
+| Card comes back | As "inserted later". |
+
+Verified without a card: the poll loop runs for a minute with the heap flat and
+recognition unaffected. **Not verified** (needs a card): hot insert, live vocabulary swap,
+removal mid-use.
+
 ### Verified output (2026-09-05, no card in the slot)
 
 ```
@@ -93,7 +111,9 @@ stays at 181 KB.
 ### Not verified yet
 
 - **The SD path.** No card was available. `bsp_sdcard_mount()` fails cleanly without one
-  and the fallback runs; a card with `tools/make_book.py --demo` output is the test.
+  and the fallback runs; a card with `tools/make_book.py --demo` output is the test. Insert
+  it while the board is running — that exercises hot-insert and the live vocabulary swap
+  at the same time.
 - **Audible chime and prompt.** The DAC accepts them; nobody has heard the speaker.
 
 Two quirks worth knowing: the BSP warns *Long filenames on SD card are disabled* on every
@@ -211,6 +231,7 @@ main/app_main.c        boot, SD mount, self-test, the word → card → sound lo
 main/audio_io.[ch]     I2S + ES8311 at 16 kHz mono (from M0)
 main/recognizer.[ch]   ESP-SR AFE + MultiNet behind word_event_t — the module project 3 replaces
 main/book.[ch]         words.json → vocabulary; built-in fallback
+main/sdcard.[ch]       card presence: polled mount / status, no card-detect pin
 main/cards.[ch]        full-screen photo / text cards (LVGL)
 main/player.[ch]       chime synth + WAV playback, pausing recognition meanwhile
 main/testclips/*.pcm   synthesised 16 kHz clips embedded for the boot self-test

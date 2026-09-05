@@ -135,3 +135,25 @@ void book_load(book_t *book, const char *dir)
     book->from_sd = true;
     ESP_LOGI(TAG, "loaded %s: %u words, %d photos, %d prompts", path, (unsigned)book->count, photos, prompts);
 }
+
+bool book_same_words(const book_t *a, const book_t *b)
+{
+    if (a->count != b->count) {
+        return false;
+    }
+    for (size_t i = 0; i < a->count; i++) {
+        if (strcmp(a->words[i].text, b->words[i].text) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void book_adopt_files(book_t *dst, const book_t *src)
+{
+    for (size_t i = 0; i < dst->count && i < src->count; i++) {
+        strlcpy(dst->words[i].photo, src->words[i].photo, BOOK_PATH_LEN);
+        strlcpy(dst->words[i].prompt, src->words[i].prompt, BOOK_PATH_LEN);
+    }
+    dst->from_sd = src->from_sd;
+}

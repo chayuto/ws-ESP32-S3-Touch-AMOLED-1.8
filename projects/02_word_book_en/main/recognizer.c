@@ -65,6 +65,10 @@ static const char *s_inject_label;
 static int64_t s_inject_started_us;
 static volatile bool s_paused;
 static volatile bool s_flush;   /* set on resume; detect_task performs the clean() itself */
+static const word_def_t *volatile s_pending_words;
+static volatile size_t s_pending_count;
+
+static void apply_words(const word_def_t *words, size_t count);
 
 static void feed_task(void *arg)
 {
@@ -139,6 +143,14 @@ static void detect_task(void *arg)
             s_flush = false;
             s_mn->clean(s_mn_data);
         }
+        if (s_pending_words != NULL) {
+            const word_def_t *w = s_pending_words;
+            size_t n = s_pending_count;
+            s_pending_words = NULL;
+            ESP_LOGI(TAG, "swapping vocabulary (%u words)", (unsigned)n);
+            apply_words(w, n);
+            s_mn->clean(s_mn_data);
+        }
         if (s_paused) {
             continue; /* frames fed before the pause landed; drop them */
         }
@@ -175,6 +187,31 @@ static void detect_task(void *arg)
             s_mn->clean(s_mn_data);
         }
     }
+}
+
+/* Load a word list into MultiNet. Only ever called from the task that owns the model. */
+static void apply_words(const word_def_t *words, size_t count)
+{
+    esp_mn_commands_clear();
+    size_t loaded = 0;
+    for (size_t i = 0; i < count; i++) {
+        esp_err_t err = esp_mn_commands_add((int)i, words[i].text);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "word %u '%s' rejected by G2P/model (%s)", (unsigned)i, words[i].text, esp_err_to_name(err));
+        } else {
+            loaded++;
+        }
+    }
+    esp_mn_error_t *bad = esp_mn_commands_update();
+    if (bad != NULL && bad->num > 0) {
+        for (int i = 0; i < bad->num; i++) {
+            ESP_LOGW(TAG, "command not loadable: '%s'", bad->phrases[i]->string);
+        }
+    }
+    s_words = words;
+    s_word_count = count;
+    s_mn->print_active_speech_commands(s_mn_data);
+    ESP_LOGI(TAG, "vocabulary: %u of %u words loaded", (unsigned)loaded, (unsigned)count);
 }
 
 esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, size_t count, QueueHandle_t out)
@@ -225,20 +262,7 @@ esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, 
 
     /* Vocabulary: graphemes in, phonemes via the component's own G2P. */
     esp_mn_commands_alloc((esp_mn_iface_t *)s_mn, s_mn_data);
-    esp_mn_commands_clear();
-    for (size_t i = 0; i < count; i++) {
-        esp_err_t err = esp_mn_commands_add((int)i, words[i].text);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "word %u '%s' rejected by G2P/model (%s)", (unsigned)i, words[i].text, esp_err_to_name(err));
-        }
-    }
-    esp_mn_error_t *bad = esp_mn_commands_update();
-    if (bad != NULL && bad->num > 0) {
-        for (int i = 0; i < bad->num; i++) {
-            ESP_LOGW(TAG, "command not loadable: '%s'", bad->phrases[i]->string);
-        }
-    }
-    s_mn->print_active_speech_commands(s_mn_data);
+    apply_words(words, count);
 
     size_t internal_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t psram_after = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -283,4 +307,10 @@ void recognizer_resume(void)
 {
     s_flush = true;
     s_paused = false;
+}
+
+void recognizer_set_words(const word_def_t *words, size_t count)
+{
+    s_pending_count = count;
+    s_pending_words = words; /* set last: the detect task polls this */
 }

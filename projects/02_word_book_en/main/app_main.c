@@ -27,6 +27,7 @@
 #include "lvgl.h"
 #include "player.h"
 #include "recognizer.h"
+#include "sdcard.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "wordbook";
@@ -54,8 +55,17 @@ static const clip_t s_clips[] = {
 };
 #define CLIP_COUNT (sizeof(s_clips) / sizeof(s_clips[0]))
 
-static book_t s_book;
-static word_def_t s_defs[BOOK_MAX_WORDS];
+/*
+ * Two books and two word tables, used alternately. The recogniser reads its
+ * table from another core, so a vocabulary swap builds the inactive pair in
+ * full and hands it over; the previous pair stays untouched until the swap
+ * after that, which is seconds away at the very least.
+ */
+static book_t s_books[2];
+static word_def_t s_defs[2][BOOK_MAX_WORDS];
+static int s_active;
+#define s_book (s_books[s_active])
+static bool s_files_ok;   /* card present and the book's files reachable */
 static QueueHandle_t s_events;
 static uint32_t s_heard;
 static int s_last_word = -1;
@@ -96,15 +106,22 @@ static void on_word(const word_event_t *ev)
     if (ev->id < 0 || (size_t)ev->id >= s_book.count) {
         return;
     }
-    const book_word_t *w = &s_book.words[ev->id];
     s_heard++;
     s_last_word = ev->id;
-    ESP_LOGI(TAG, "heard '%s' prob=%.3f -> %s card", w->text, ev->prob, w->photo[0] ? "photo" : "text");
+    book_word_t w = s_book.words[ev->id];
+    if (!s_files_ok) {
+        /* No card, or it went away: the word still works, on a text card with the chime. */
+        w.photo[0] = '\0';
+        w.prompt[0] = '\0';
+    }
+    ESP_LOGI(TAG, "heard '%s' prob=%.3f -> %s card", w.text, ev->prob, w.photo[0] ? "photo" : "text");
     wake_screen();
-    cards_show_word(w, ev->prob, s_heard);
+    if (!cards_show_word(&w, ev->prob, s_heard) && w.photo[0]) {
+        sdcard_report_io_error();
+    }
     player_chime();
-    if (w->prompt[0]) {
-        player_wav(w->prompt);
+    if (w.prompt[0] && player_wav(w.prompt) != ESP_OK) {
+        sdcard_report_io_error();
     }
 }
 
@@ -119,9 +136,49 @@ static void replay_last(void)
     const book_word_t *w = &s_book.words[s_last_word];
     ESP_LOGI(TAG, "tap: replay '%s'", w->text);
     player_chime();
-    if (w->prompt[0]) {
-        player_wav(w->prompt);
+    if (s_files_ok && w->prompt[0] && player_wav(w->prompt) != ESP_OK) {
+        sdcard_report_io_error();
     }
+}
+
+/* Build the word table the recogniser reads from a book. */
+static void build_defs(int slot)
+{
+    for (size_t i = 0; i < s_books[slot].count; i++) {
+        s_defs[slot][i].text = s_books[slot].words[i].text;
+    }
+}
+
+/* The card appeared (at boot, or later): take its book. */
+static void card_arrived(bool at_boot)
+{
+    int slot = at_boot ? s_active : s_active ^ 1;
+    book_t *nb = &s_books[slot];
+    book_load(nb, BOOK_DIR);
+    if (!nb->from_sd) {
+        ESP_LOGW(TAG, "card present but no usable %s/words.json; keeping current words", BOOK_DIR);
+        s_files_ok = false;
+        return;
+    }
+    if (at_boot) {
+        build_defs(slot);
+    } else if (book_same_words(nb, &s_book)) {
+        book_adopt_files(&s_book, nb);
+        ESP_LOGI(TAG, "same %u words as before; photos and prompts now available", (unsigned)s_book.count);
+    } else {
+        build_defs(slot);
+        recognizer_set_words(s_defs[slot], nb->count);
+        s_active = slot;
+        ESP_LOGI(TAG, "new book: %u words; vocabulary swap requested", (unsigned)nb->count);
+    }
+    s_files_ok = true;
+}
+
+static void card_left(void)
+{
+    s_files_ok = false;
+    ESP_LOGW(TAG, "card lost; keeping %u words, text cards until it returns", (unsigned)s_book.count);
+    cards_status("card removed - text cards");
 }
 
 /* Drain events for up to `wait_ms`; returns the most confident one, or false. */
@@ -195,17 +252,13 @@ void app_main(void)
     cards_show_idle();
     cards_status("starting");
 
-    /* Content: SD card if there is one, built-in vocabulary if not. */
-    esp_err_t sd = bsp_sdcard_mount();
-    if (sd == ESP_OK) {
-        ESP_LOGI(TAG, "SD card mounted at %s: %s, %llu MB", BSP_SD_MOUNT_POINT, bsp_sdcard->cid.name,
-                 ((uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size) / (1024 * 1024));
-    } else {
-        ESP_LOGW(TAG, "no SD card (%s); text cards only", esp_err_to_name(sd));
+    /* Content: the card's book if there is one, built-in vocabulary if not. */
+    if (sdcard_init()) {
+        card_arrived(true);
     }
-    book_load(&s_book, BOOK_DIR);
-    for (size_t i = 0; i < s_book.count; i++) {
-        s_defs[i].text = s_book.words[i].text;
+    if (!s_book.count) {
+        book_load(&s_book, "/nonexistent"); /* falls straight through to the built-in list */
+        build_defs(s_active);
     }
 
     audio_io_t io = {0};
@@ -214,7 +267,7 @@ void app_main(void)
         return;
     }
     player_init(io.spk);
-    if (recognizer_start(io.mic, s_defs, s_book.count, s_events) != ESP_OK) {
+    if (recognizer_start(io.mic, s_defs[s_active], s_book.count, s_events) != ESP_OK) {
         cards_status("recogniser failed - see serial");
         return;
     }
@@ -225,7 +278,7 @@ void app_main(void)
 #endif
 
     char status[48];
-    snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_book.from_sd ? " from SD" : ", built-in");
+    snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_files_ok ? " from SD" : ", built-in");
     cards_status(status);
 
     TickType_t last_beat = xTaskGetTickCount();
@@ -237,6 +290,13 @@ void app_main(void)
         }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
             replay_last();
+        }
+        if (sdcard_poll()) {
+            if (sdcard_present()) {
+                card_arrived(false);
+            } else {
+                card_left();
+            }
         }
         maybe_dim();
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {

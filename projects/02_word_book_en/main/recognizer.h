@@ -45,3 +45,10 @@ bool recognizer_injecting(void);
  */
 void recognizer_pause(void);
 void recognizer_resume(void);
+
+/*
+ * Replace the vocabulary while running. `words` must stay valid until the next
+ * call; the swap is performed by the detect task at a safe point, so this
+ * returns before the new words are active.
+ */
+void recognizer_set_words(const word_def_t *words, size_t count);

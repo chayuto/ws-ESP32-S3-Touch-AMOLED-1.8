@@ -331,8 +331,10 @@ Honest list, so nobody builds on an assumption:
   right timing. Not yet witnessed by a person: speech-level capture, audible playback.
   Speaker volume 90 (vendor's V2 value) and mic gain 30 dB are starting points.
 - **microSD** — no card has been in the slot. `bsp_sdcard_mount()` fails cleanly without
-  one (`sdmmc_init_ocr ... 0x107`, ~50 ms). `02_word_book_en` has the full read path
-  written; a card with `tools/make_book.py --demo` output tests it.
+  one (`sdmmc_init_ocr ... 0x107`, ~27–50 ms). `02_word_book_en` has the full read path
+  written plus hot-insert, removal-while-running and a live vocabulary swap, all
+  untested; a card with `tools/make_book.py --demo` output, inserted while running,
+  tests the lot. There is **no card-detect pin** — presence is polled.
 - **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
 - **Battery operation** — never run off the MX1.25 connector.

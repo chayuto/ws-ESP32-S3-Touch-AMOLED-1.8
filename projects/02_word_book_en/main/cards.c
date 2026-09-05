@@ -148,7 +148,7 @@ static bool load_photo(const char *path, uint8_t *dst)
     return true;
 }
 
-void cards_show_word(const book_word_t *word, float confidence, unsigned nth)
+bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
 {
     char sub[32];
     snprintf(sub, sizeof(sub), "%.0f%%   #%u", confidence * 100.0f, nth);
@@ -160,7 +160,7 @@ void cards_show_word(const book_word_t *word, float confidence, unsigned nth)
     }
 
     if (!bsp_display_lock(300)) {
-        return;
+        return photo;
     }
     if (photo) {
         lv_image_set_src(s_photo, &s_dsc[slot]);
@@ -179,6 +179,7 @@ void cards_show_word(const book_word_t *word, float confidence, unsigned nth)
     lv_label_set_text(s_sub, sub);
     place_word(photo);
     bsp_display_unlock();
+    return photo;
 }
 
 void cards_status(const char *text)

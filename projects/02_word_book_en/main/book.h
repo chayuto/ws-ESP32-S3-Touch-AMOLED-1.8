@@ -27,3 +27,9 @@ typedef struct {
  * app always has something to listen for.
  */
 void book_load(book_t *book, const char *dir);
+
+/* True if both books list the same words in the same order (files may differ). */
+bool book_same_words(const book_t *a, const book_t *b);
+
+/* Copy photo/prompt paths from src into dst, word by word. Only valid when same_words. */
+void book_adopt_files(book_t *dst, const book_t *src);

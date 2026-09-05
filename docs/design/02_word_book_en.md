@@ -164,7 +164,10 @@ New `partitions.csv`: `nvs 24K / phy 4K / factory 4M / model 6M / storage 1M`.
 4. **Audio and SD sharing nothing** — I²S and SDMMC are on separate pins here, unlike
    some boards. Not a real risk; noted because it usually is.
 5. **Speaker + mic in one small case** = feedback into the recogniser while a prompt
-   plays. Simple fix: mute recognition while playing. No AEC needed.
+   plays. Simple fix: mute recognition while playing. No AEC needed. *Done.*
+6. **The card is removable and a toddler will remove it.** No card-detect pin, so
+   presence is polled; the vocabulary is kept when the card goes, only the files stop.
+   Inserting a card swaps the vocabulary live. *Written; untested without a card.*
 
 ## What project 3 (multilingual) needs, and what this project does about it
 
