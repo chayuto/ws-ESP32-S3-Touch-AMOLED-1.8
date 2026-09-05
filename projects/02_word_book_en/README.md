@@ -36,9 +36,11 @@ I (49835) recog: detected [1/1] id=9 'APPLE' prob=0.211  (vad=1 vol=-56.6 dBFS, 
 
 Five for five, but look at the numbers: real speech scores well below the synthesised
 clips, and DOG and APPLE sit *under* the 0.20 floor the self-test had settled on. The
-floor is now `CONFIG_WORDBOOK_MIN_PROB_PCT`, default 15, and for a toddler it will
-likely need to go lower still — the hard limit is 14, above the 13.5 % junk that
-digital silence produces. Two other guards landed with it: one card per second, so a
+floor is `CONFIG_WORDBOOK_MIN_PROB_PCT`, now **20** — a noisy room later produced junk
+up to 17 %, so 15 was too close — and above it sits `CONFIG_WORDBOOK_SOUND_PROB_PCT`,
+default **35**: between the two a card is shown silently, at or above it the chime and
+prompt play. A wrong card is cheap; a wrong sound is what makes a toy feel broken. Both
+are tuned from the SD card log, not guessed. Two other guards landed with it: one card per second, so a
 word's tail cannot fire a second card, and a 300 ms hold after playback so the mic does
 not hear the chime's DMA tail.
 

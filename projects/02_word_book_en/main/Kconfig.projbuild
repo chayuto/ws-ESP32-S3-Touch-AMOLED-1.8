@@ -10,14 +10,23 @@ menu "Word book"
             it costs about 15 seconds and three chimes on every boot.
 
     config WORDBOOK_MIN_PROB_PCT
-        int "Minimum recogniser confidence (%)"
+        int "Minimum confidence to show a card (%)"
         range 1 99
-        default 15
+        default 20
         help
             Detections below this are ignored. Digital silence produces a fixed
-            junk detection at 13.5%, so do not go below 14. A larger vocabulary
-            spreads confidence thinner: with 8 words a synthesised "dog" scored
-            72%, with 10 words 18%. Tune on the child, generously.
+            junk detection at 13.5%, and a noisy room produced junk up to 17%,
+            so do not go below 18. Adult speech at arm's length scored 16-53%
+            across ten words. Tune on the child, from the SD card log.
+
+    config WORDBOOK_SOUND_PROB_PCT
+        int "Minimum confidence for the chime and prompt (%)"
+        range 1 99
+        default 35
+        help
+            Between MIN_PROB and this, the card is shown silently. At or above
+            it, the chime and the recorded prompt play too. A wrong card is
+            cheap; a wrong sound is what makes a toy feel broken.
 
     config WORDBOOK_VOLUME
         int "Speaker volume (0-100)"

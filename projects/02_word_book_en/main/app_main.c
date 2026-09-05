@@ -146,10 +146,15 @@ static void on_word(const word_event_t *ev)
         w.photo[0] = '\0';
         w.prompt[0] = '\0';
     }
-    ESP_LOGI(TAG, "heard '%s' prob=%.3f -> %s card", w.text, ev->prob, w.photo[0] ? "photo" : "text");
+    bool confident = ev->prob >= CONFIG_WORDBOOK_SOUND_PROB_PCT / 100.0f;
+    ESP_LOGI(TAG, "heard '%s' prob=%.3f -> %s card, %s", w.text, ev->prob, w.photo[0] ? "photo" : "text",
+             confident ? "with sound" : "silent (below sound threshold)");
     wake_screen();
     if (!cards_show_word(&w, ev->prob, s_heard) && w.photo[0]) {
         sdcard_report_io_error();
+    }
+    if (!confident) {
+        return;
     }
     player_chime();
     if (w.prompt[0] && player_wav(w.prompt) != ESP_OK) {
