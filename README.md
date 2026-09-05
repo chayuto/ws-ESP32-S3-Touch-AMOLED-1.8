@@ -76,6 +76,13 @@ I (670) app: display up: 368x448, touch indev registered
 I (710) app: UI drawn; tap the panel to see touch events here
 ```
 
+### [`projects/02_word_book_en`](./projects/02_word_book_en/) — first application
+
+A toddler says a word; the board shows the matching photo and says it back. Offline
+speech recognition on ESP-SR MultiNet7, content as data on the SD card. Built in
+milestones — **M0 (mic → PSRAM → speaker at 16 kHz) verified 2026-09-05.** Design in
+[`docs/design/02_word_book_en.md`](./docs/design/02_word_book_en.md).
+
 ## Repo layout
 
 ```
@@ -86,11 +93,13 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 │   ├── commands/             # /build /flash /monitor /hardware-specs /peripherals /restore-factory
 │   └── skills/               # new-project, serial-capture
 ├── docs/
-│   ├── research/             # surveys, design + method docs
+│   ├── design/               # per-project design notes
+│   ├── research/             # lab notes and surveys
 │   └── internal/             # working notes (gitignored)
 ├── projects/
 │   ├── bringup-01/           # first-boot validation
-│   └── 01_project_template/  # display + touch + LVGL starting point
+│   ├── 01_project_template/  # display + touch + LVGL starting point
+│   └── 02_word_book_en/      # voice-triggered picture book (in progress)
 └── ref/                      # vendor docs + vendor clone (gitignored, ~650 MB)
     ├── datasheets/  schematic/  wiki/  firmware/  demo/
 ```

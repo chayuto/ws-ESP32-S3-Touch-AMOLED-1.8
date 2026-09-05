@@ -115,6 +115,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 |---|---|---|
 | `bringup-01` | Chip report, I²C census, V1/V2 revision detection. No display. | yes — full output in its README |
 | `01_project_template` | The scaffold. BSP init, display, touch, LVGL 9 screen with a tap counter, heap heartbeat. | yes — display, touch registration, 240 MHz, stable heap |
+| `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0 (16 kHz mic → PSRAM → speaker) done 2026-09-05 |
 
 ## ESP-IDF Environment
 
@@ -325,7 +326,10 @@ Honest list, so nobody builds on an assumption:
   and carries the running total in its heartbeat. Use the **stty/dd** attach from the
   `serial-capture` skill, not the pyserial script — a pyserial open resets the board and
   zeroes the counter, which is what defeated the first two attempts.
-- **Audio** — ES8311 answers on I²C; no playback or capture attempted.
+- **Audio, partly.** `02_word_book_en` M0 opens both codec directions at 16 kHz mono,
+  records 3 s (ambient at −43 dBFS peak — the mic is live) and plays it back with the
+  right timing. Not yet witnessed by a person: speech-level capture, audible playback.
+  Speaker volume 90 (vendor's V2 value) and mic gain 30 dB are starting points.
 - **microSD** — no card mounted yet.
 - **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
