@@ -18,7 +18,7 @@
 static const char *TAG = "sdlog";
 
 #define RING_BYTES   (64 * 1024)
-#define LINE_MAX     512
+#define LOG_LINE_MAX     512
 #define DRAIN_MS     250
 #define SYNC_MS      2000
 
@@ -55,7 +55,7 @@ static int hook(const char *fmt, va_list args)
     int ret = s_console(fmt, args); /* console first, exactly as before */
 
     if (s_ring != NULL && !xPortInIsrContext()) {
-        char line[LINE_MAX];
+        char line[LOG_LINE_MAX];
         int n = vsnprintf(line, sizeof(line), fmt, copy);
         if (n > 0) {
             if (n >= (int)sizeof(line)) {
