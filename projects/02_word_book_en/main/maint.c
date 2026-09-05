@@ -19,6 +19,7 @@
 #include "freertos/task.h"
 #include "lwip/ip_addr.h"
 #include "ping/ping_sock.h"
+#include "pmu.h"
 #include "recognizer.h"
 #include "sdcard.h"
 #include "sdkconfig.h"
@@ -163,8 +164,10 @@ static esp_err_t h_metrics(httpd_req_t *req)
     cJSON_AddBoolToObject(o, "files_ok", st.files_ok);
     cJSON_AddBoolToObject(o, "log_active", sdlog_active());
     cJSON_AddNumberToObject(o, "log_bytes", (double)sdlog_size());
-    cJSON_AddBoolToObject(o, "classifier_active", sdlog_aux_active());
-    cJSON_AddNumberToObject(o, "classifier_bytes", (double)sdlog_aux_size());
+    cJSON_AddBoolToObject(o, "classifier_active", sdlog_aux_active(0));
+    cJSON_AddNumberToObject(o, "classifier_bytes", (double)sdlog_aux_size(0));
+    cJSON_AddBoolToObject(o, "power_active", sdlog_aux_active(1));
+    cJSON_AddNumberToObject(o, "power_bytes", (double)sdlog_aux_size(1));
     cJSON_AddNumberToObject(o, "words", st.words);
     cJSON_AddNumberToObject(o, "heard", st.heard);
     cJSON_AddStringToObject(o, "last_word", st.last_word ? st.last_word : "");
@@ -172,6 +175,15 @@ static esp_err_t h_metrics(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "mic_avg_dbfs", avg);
     cJSON_AddNumberToObject(o, "mic_peak_dbfs", peak);
     cJSON_AddNumberToObject(o, "mic_speech_pct", speech);
+    pmu_status_t ps = {0};
+    pmu_read(&ps);
+    cJSON_AddBoolToObject(o, "usb", ps.vbus_in);
+    cJSON_AddBoolToObject(o, "battery", ps.batt_present);
+    cJSON_AddNumberToObject(o, "vbat_mv", ps.vbat_mv);
+    cJSON_AddNumberToObject(o, "vbus_mv", ps.vbus_mv);
+    cJSON_AddNumberToObject(o, "vsys_mv", ps.vsys_mv);
+    cJSON_AddNumberToObject(o, "batt_pct", ps.batt_pct);
+    cJSON_AddBoolToObject(o, "charging", ps.charging);
     cJSON_AddNumberToObject(o, "min_prob_pct", CONFIG_WORDBOOK_MIN_PROB_PCT);
     cJSON_AddNumberToObject(o, "sound_prob_pct", CONFIG_WORDBOOK_SOUND_PROB_PCT);
     return send_json(req, o);
@@ -364,12 +376,24 @@ static esp_err_t h_log_get(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+static esp_err_t send_aux(httpd_req_t *req, int ch, const char *dl_name);
+
 static esp_err_t h_clog_get(httpd_req_t *req)
 {
+    return send_aux(req, 0, "02_word_book_en.classifier.jsonl");
+}
+
+static esp_err_t h_power_get(httpd_req_t *req)
+{
+    return send_aux(req, 1, "02_word_book_en.power.jsonl");
+}
+
+static esp_err_t send_aux(httpd_req_t *req, int ch, const char *dl_name)
+{
     touch();
-    const char *path = sdlog_aux_path();
+    const char *path = sdlog_aux_path(ch);
     if (!path[0]) {
-        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no classifier log (card?)");
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no record file (card?)");
     }
     char q[16] = {0};
     int tail = 0;
@@ -384,8 +408,10 @@ static esp_err_t h_clog_get(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "cannot open");
     }
     httpd_resp_set_type(req, "application/x-ndjson");
+    char dl[96];
+    snprintf(dl, sizeof(dl), "attachment; filename=%s", dl_name);
     if (tail <= 0) {
-        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=02_word_book_en.classifier.jsonl");
+        httpd_resp_set_hdr(req, "Content-Disposition", dl);
     }
     char *buf = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
     if (buf == NULL) {
@@ -424,8 +450,15 @@ static esp_err_t h_clog_get(httpd_req_t *req)
 static esp_err_t h_clog_delete(httpd_req_t *req)
 {
     touch();
-    return sdlog_aux_truncate() == ESP_OK ? httpd_resp_sendstr(req, "ok")
-                                           : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no classifier log");
+    return sdlog_aux_truncate(0) == ESP_OK ? httpd_resp_sendstr(req, "ok")
+                                            : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no classifier log");
+}
+
+static esp_err_t h_power_delete(httpd_req_t *req)
+{
+    touch();
+    return sdlog_aux_truncate(1) == ESP_OK ? httpd_resp_sendstr(req, "ok")
+                                            : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no power log");
 }
 
 static esp_err_t h_log_delete(httpd_req_t *req)
@@ -468,7 +501,7 @@ esp_err_t maint_start(maint_state_cb_t cb)
     hc.uri_match_fn = httpd_uri_match_wildcard;
     hc.stack_size = 6144;
     hc.max_open_sockets = 4; /* LWIP_MAX_SOCKETS (8) minus the 3 httpd keeps for itself, minus one spare */
-    hc.max_uri_handlers = 14;
+    hc.max_uri_handlers = 16;
     hc.lru_purge_enable = true;
     hc.recv_wait_timeout = 30;
     hc.send_wait_timeout = 30;
@@ -488,6 +521,8 @@ esp_err_t maint_start(maint_state_cb_t cb)
         {.uri = "/api/log", .method = HTTP_DELETE, .handler = h_log_delete},
         {.uri = "/api/classifier", .method = HTTP_GET, .handler = h_clog_get},
         {.uri = "/api/classifier", .method = HTTP_DELETE, .handler = h_clog_delete},
+        {.uri = "/api/power", .method = HTTP_GET, .handler = h_power_get},
+        {.uri = "/api/power", .method = HTTP_DELETE, .handler = h_power_delete},
         {.uri = "/api/reload", .method = HTTP_POST, .handler = h_reload},
         {.uri = "/api/reboot", .method = HTTP_POST, .handler = h_reboot},
     };

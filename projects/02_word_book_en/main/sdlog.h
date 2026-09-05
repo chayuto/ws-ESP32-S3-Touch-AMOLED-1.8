@@ -28,13 +28,14 @@ bool sdlog_active(void);
  * sdlog_aux_write() from any task, drained and synced by the same task as the log.
  * Opened and closed together with the main file.
  */
-esp_err_t sdlog_aux_open(const char *path);
-void sdlog_aux_close(void);
-void sdlog_aux_write(const char *line); /* one record, no trailing newline needed */
-bool sdlog_aux_active(void);
-const char *sdlog_aux_path(void);
-long sdlog_aux_size(void);
-esp_err_t sdlog_aux_truncate(void);
+#define SDLOG_AUX_CHANNELS 2 /* 0: classifier records, 1: power records */
+esp_err_t sdlog_aux_open(int ch, const char *path);
+void sdlog_aux_close(int ch);
+void sdlog_aux_write(int ch, const char *line); /* one record, no trailing newline needed */
+bool sdlog_aux_active(int ch);
+const char *sdlog_aux_path(int ch);
+long sdlog_aux_size(int ch);
+esp_err_t sdlog_aux_truncate(int ch);
 
 /* Current file's path and size in bytes (0 if none). */
 const char *sdlog_path(void);

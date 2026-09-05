@@ -27,6 +27,9 @@ dl{margin:0 16px;display:grid;grid-template-columns:max-content 1fr;gap:2px 14px
 <h2>classifier records <small style="color:#667">(JSON Lines: session / det / env)</small></h2>
 <div class="row"><button onclick="ctail()">last 100 records</button><a href="/api/classifier" download><button>download all</button></a><button class="x" onclick="cclear()">clear</button></div>
 <pre id="clog"></pre>
+<h2>power records <small style="color:#667">(every 30 s and on every plug / unplug: USB, battery mV and %, system mV, charge state, rail enables)</small></h2>
+<div class="row"><button onclick="ptail()">last 100 records</button><a href="/api/power" download><button>download all</button></a><button class="x" onclick="pclear()">clear</button></div>
+<pre id="plog"></pre>
 <h2>device</h2>
 <dl id="metrics"></dl>
 <div class="row"><button onclick="metrics()">refresh</button><button class="x" onclick="reboot()">reboot</button></div>
@@ -66,9 +69,11 @@ async function tail(){$('#log').textContent=await (await fetch('/api/log?tail=20
 async function clearLog(){if(!confirm('clear the log?'))return;const r=await fetch('/api/log',{method:'DELETE'});say(r.ok?'log cleared':'failed');tail()}
 async function ctail(){$('#clog').textContent=await (await fetch('/api/classifier?tail=100')).text()}
 async function cclear(){if(!confirm('clear the classifier records?'))return;const r=await fetch('/api/classifier',{method:'DELETE'});say(r.ok?'cleared':'failed');ctail()}
+async function ptail(){$('#plog').textContent=await (await fetch('/api/power?tail=100')).text()}
+async function pclear(){if(!confirm('clear the power records?'))return;const r=await fetch('/api/power',{method:'DELETE'});say(r.ok?'cleared':'failed');ptail()}
 async function metrics(){
   const m=await (await fetch('/api/metrics')).json();const dl=$('#metrics');dl.innerHTML='';
-  const rows={'time':m.time,'uptime':Math.floor(m.uptime_s/60)+' min','firmware':m.version+' (IDF '+m.idf+')','internal RAM free':fmt(m.internal_free)+' (min '+fmt(m.internal_min_free)+')','PSRAM free':fmt(m.psram_free),'card':m.card?(m.files_ok?'present, book loaded':'present'):'absent','log':m.log_active?fmt(m.log_bytes):'off','classifier records':m.classifier_active?fmt(m.classifier_bytes):'off','words':m.words,'heard':m.heard+(m.last_word?' (last: '+m.last_word+' '+Math.round(m.last_prob*100)+'%)':''),'mic (last 5 s before maintenance)':m.mic_avg_dbfs.toFixed(1)+' dBFS avg, '+m.mic_peak_dbfs.toFixed(1)+' peak, speech '+m.mic_speech_pct+'%','thresholds':'card '+m.min_prob_pct+'%, sound '+m.sound_prob_pct+'%'};
+  const rows={'time':m.time,'uptime':Math.floor(m.uptime_s/60)+' min','firmware':m.version+' (IDF '+m.idf+')','internal RAM free':fmt(m.internal_free)+' (min '+fmt(m.internal_min_free)+')','PSRAM free':fmt(m.psram_free),'card':m.card?(m.files_ok?'present, book loaded':'present'):'absent','log':m.log_active?fmt(m.log_bytes):'off','classifier records':m.classifier_active?fmt(m.classifier_bytes):'off','power records':m.power_active?fmt(m.power_bytes):'off','power':(m.usb?'USB in ('+m.vbus_mv+' mV)':'on battery')+', battery '+(m.battery?m.vbat_mv+' mV '+m.batt_pct+'%'+(m.charging?', charging':''):'absent')+', system '+m.vsys_mv+' mV','words':m.words,'heard':m.heard+(m.last_word?' (last: '+m.last_word+' '+Math.round(m.last_prob*100)+'%)':''),'mic (last 5 s before maintenance)':m.mic_avg_dbfs.toFixed(1)+' dBFS avg, '+m.mic_peak_dbfs.toFixed(1)+' peak, speech '+m.mic_speech_pct+'%','thresholds':'card '+m.min_prob_pct+'%, sound '+m.sound_prob_pct+'%'};
   for(const k in rows){dl.innerHTML+=`<dt>${k}</dt><dd>${rows[k]}</dd>`}
 }
 async function reboot(){if(!confirm('reboot the board?'))return;await fetch('/api/reboot',{method:'POST'});say('rebooting; this page will stop responding')}

@@ -19,6 +19,8 @@
 #include <string.h>
 
 #include "esp_afe_config.h"
+#include "esp_nsn_models.h"
+#include "esp_vadn_models.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
 #include "esp_check.h"
@@ -40,6 +42,11 @@ static const char *TAG = "recog";
 #define MN_TIMEOUT_MS   5000
 #define BOOK_WORDS_FOR_CLOG 64
 
+/* The neural VAD drops back to silence within a few hundred ms of a word ending, and
+ * MultiNet fires ~600 ms after the end; gating on the detection frame alone threw
+ * away a 0.94. Speech any time in this window before the detection counts. */
+#define SPEECH_HOLD_MS  1500
+
 /*
  * Two gates, and VAD is the one that matters. Digital silence reliably produced
  * 'CAR' at exactly 0.135 with VAD reporting *no speech*; real words fired with
@@ -51,6 +58,7 @@ static const char *TAG = "recog";
 
 static const esp_afe_sr_iface_t *s_afe;
 static esp_afe_sr_data_t *s_afe_data;
+static afe_config_t *s_afe_cfg;        /* kept: the AFE is rebuilt from it after maintenance */
 static const esp_mn_iface_t *s_mn;
 static model_iface_data_t *s_mn_data;
 static srmodel_list_t *s_models;
@@ -144,6 +152,7 @@ static void detect_task(void *arg)
     }
 
     uint32_t frames = 0;
+    int64_t last_speech_us = -1;
     /* Ambient level report every ~5 s: what the recogniser is actually hearing. */
     float lvl_sum = 0, lvl_max = -120;
     uint32_t lvl_n = 0, lvl_speech = 0;
@@ -154,6 +163,9 @@ static void detect_task(void *arg)
             continue;
         }
         frames++;
+        if (res->vad_state == VAD_SPEECH) {
+            last_speech_us = esp_timer_get_time();
+        }
         if (!s_paused) {
             lvl_sum += res->data_volume;
             if (res->data_volume > lvl_max) {
@@ -202,7 +214,8 @@ static void detect_task(void *arg)
                 ESP_LOGI(TAG, "detected [%d/%d] id=%d '%s' prob=%.3f  (vad=%d vol=%.1f dBFS, frame %" PRIu32 ")", i + 1,
                          r->num, id, s_words[id].text, r->prob[i], (int)res->vad_state, res->data_volume, frames);
             }
-            bool speech = (res->vad_state == VAD_SPEECH);
+            bool speech = (res->vad_state == VAD_SPEECH) ||
+                          (last_speech_us >= 0 && esp_timer_get_time() - last_speech_us < SPEECH_HOLD_MS * 1000);
             bool valid = r->num > 0 && r->command_id[0] >= 0 && (size_t)r->command_id[0] < s_word_count;
             const char *verdict = !valid ? "invalid" : !speech ? "silence" : r->prob[0] >= MIN_PROB ? "accepted" : "low";
             clog_cand_t cands[ESP_MN_RESULT_MAX_NUM];
@@ -286,8 +299,13 @@ esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, 
 {
     s_mic = mic;
     s_out = out;
-    if (s_afe_data != NULL) {
-        /* Restart after a stop: engine is live, no task runs, so the words go straight in. */
+    if (s_mn_data != NULL) {
+        /* Restart after a stop: MultiNet is live and no task runs. Rebuild the AFE from
+         * the kept config, then the words go straight in. */
+        if (s_afe_data == NULL) {
+            s_afe_data = s_afe->create_from_config(s_afe_cfg);
+            ESP_RETURN_ON_FALSE(s_afe_data != NULL, ESP_FAIL, TAG, "afe re-create failed");
+        }
         apply_words(words, count);
         s_afe->reset_buffer(s_afe_data);
         s_mn->clean(s_mn_data);
@@ -316,7 +334,24 @@ esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, 
     afe_config_t *cfg = afe_config_init("M", s_models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
     ESP_RETURN_ON_FALSE(cfg != NULL, ESP_FAIL, TAG, "afe_config_init failed");
     cfg->wakenet_init = false;
-    cfg->aec_init = false;              /* nothing to cancel yet; playback muting comes in M2 */
+    cfg->aec_init = false;              /* recognition is paused during playback instead */
+    /* Front end against a lived-in room. Without these the pipeline was
+     * [input] -> VAD(WebRTC) -> [output] and the WebRTC VAD called a -52 dBFS room
+     * "speech" two thirds of the time; noise then matched short words. */
+    /* No noise suppression, on purpose: nsnet2 in this SR pipeline turned both the
+     * synthetic clips and a live voice into noise-level junk for MultiNet. */
+    cfg->ns_init = false;
+    char *vad_model = esp_srmodel_filter(s_models, ESP_VADN_PREFIX, NULL);
+    if (vad_model) {
+        cfg->vad_init = true;
+        cfg->vad_model_name = vad_model;          /* vadnet1_medium, neural */
+        cfg->vad_mode = VAD_MODE_2;
+        cfg->vad_min_speech_ms = 160;
+        cfg->vad_energy_threshold = CONFIG_WORDBOOK_VAD_ENERGY_DBFS; /* quiet rooms are not speech */
+        ESP_LOGI(TAG, "vad model: %s, energy floor %d dBFS", vad_model, CONFIG_WORDBOOK_VAD_ENERGY_DBFS);
+    } else {
+        ESP_LOGW(TAG, "no vadnet model in the partition; WebRTC VAD");
+    }
     cfg->afe_perferred_core = RECOG_CORE;
     cfg->afe_perferred_priority = DETECT_PRIO;
     cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
@@ -328,7 +363,7 @@ esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, 
     ESP_RETURN_ON_FALSE(s_afe != NULL, ESP_FAIL, TAG, "no AFE handle for config");
     s_afe_data = s_afe->create_from_config(cfg);
     ESP_RETURN_ON_FALSE(s_afe_data != NULL, ESP_FAIL, TAG, "afe create failed");
-    afe_config_free(cfg);
+    s_afe_cfg = cfg; /* not freed: see recognizer_stop() */
     s_afe->print_pipeline(s_afe_data);
 
     /* --- MultiNet --- */
@@ -403,7 +438,7 @@ bool recognizer_take_raw(word_event_t *out)
 
 void recognizer_stop(void)
 {
-    if (s_afe_data == NULL || (s_feed_task == NULL && s_detect_task == NULL)) {
+    if (s_afe_data == NULL) {
         return;
     }
     size_t before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -418,10 +453,16 @@ void recognizer_stop(void)
         s_feed_task = s_detect_task = NULL;
     }
     s_inject_samples = NULL;
-    /* The AFE and MultiNet stay allocated: MultiNet7's destroy() double-frees
-     * (assert in tlsf from multinet7_quantized.c:346, heap verified clean before
-     * the call), so the engine is built once per boot and only its tasks stop. */
-    ESP_LOGI(TAG, "tasks stopped, engine kept; internal +%d B", (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) - before));
+    /* MultiNet stays allocated: its destroy() double-frees (assert in tlsf from
+     * multinet7_quantized.c:346 with the heap verified clean before the call). The AFE
+     * - which holds the VAD model's internal RAM - is destroyed and rebuilt from the
+     * kept config on the next start, so maintenance mode has room for Wi-Fi. */
+    bool ok = heap_caps_check_integrity_all(true);
+    s_afe->destroy(s_afe_data);
+    s_afe_data = NULL;
+    ESP_LOGI(TAG, "tasks stopped, AFE destroyed (heap %s before, %s after), MultiNet kept; internal +%d B",
+             ok ? "ok" : "CORRUPT", heap_caps_check_integrity_all(true) ? "ok" : "CORRUPT",
+             (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) - before));
 }
 
 void recognizer_mic_level(float *avg_dbfs, float *peak_dbfs, int *speech_pct)

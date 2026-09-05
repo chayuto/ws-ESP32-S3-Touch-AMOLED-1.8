@@ -222,6 +222,27 @@ Written opportunistically like the log: only while a card is present, rotates at
 jq -c 'select(.t=="det") | [.time, .verdict, .cands[0].w, .cands[0].p]' 02_word_book_en.classifier.jsonl
 ```
 
+### Power records
+
+`/sdcard/02_word_book_en.power.jsonl` — one record every `CONFIG_WORDBOOK_POWER_LOG_S`
+(30) seconds and one on every plug or unplug: USB present and its voltage, battery
+present / mV / %, system mV, charging flag and charge phase, and the rail-enable
+registers. From the page: last 100, download, clear; API `GET /api/power[?tail=N]`,
+`DELETE /api/power`. The text log gets a full rail dump on every VBUS change too.
+
+```
+{"t":"power","time":"…","up_ms":…,"event":"usb_out","usb":0,"vbus_mv":0,"battery":1,"vbat_mv":4110,"pct":100,"vsys_mv":4100,"charging":0,"chg":"idle","dcdc_en":"0f","ldo_en":"ff01"}
+```
+
+Background: the screen was found dark twice while the board ran on its battery. This is
+the instrument for that.
+
+### Buttons
+
+A short BOOT press on a **dark or dimmed** screen wakes it — never sleeps it. Sleep is a
+short press on a fully lit screen, or the quiet timer. A long press is maintenance mode.
+(Earlier a press on a dimmed board put it to sleep, which looked like a dead screen.)
+
 ### Numbers
 
 ONE to NINE are words too (built in, and `assets/words.json` for the card). A number
@@ -418,7 +439,8 @@ main/timesync.[ch]     NTP → RTC → build time, at boot
 main/wifi_sta.[ch]     join / leave the home network (NTP and maintenance share it)
 main/maint.[ch]+.html  maintenance mode: HTTP API + page
 main/devcmd.[ch]       single-letter serial commands
-main/clog.[ch]         classifier + environment records (JSON Lines) → sdlog's second channel
+main/clog.[ch]         classifier + environment records (JSON Lines) → sdlog aux channel 0
+main/pmu.[ch]          AXP2101: rails, battery, USB; power records → sdlog aux channel 1
 main/button.[ch]       BOOT button (GPIO 0), polled: press = sleep / wake
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)

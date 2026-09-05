@@ -6,6 +6,7 @@
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "pmu.h"
 #include "sdcard.h"
 #include "sdlog.h"
 #include "timesync.h"
@@ -29,7 +30,7 @@ void clog_session(const char *const *words, size_t count, int min_prob_pct, int 
         n += snprintf(buf + n, sizeof(buf) - n, "%s\"%s\"", i ? "," : "", words[i]);
     }
     snprintf(buf + n, sizeof(buf) - n, "]}");
-    sdlog_aux_write(buf);
+    sdlog_aux_write(0, buf);
 }
 
 void clog_detection(const clog_cand_t *cands, int n_cands, int vad_speech, float volume_dbfs, const char *verdict,
@@ -44,17 +45,20 @@ void clog_detection(const clog_cand_t *cands, int n_cands, int vad_speech, float
                       cands[i].text ? cands[i].text : "?", cands[i].prob);
     }
     snprintf(buf + n, sizeof(buf) - n, "]}");
-    sdlog_aux_write(buf);
+    sdlog_aux_write(0, buf);
 }
 
 void clog_env(float mic_avg_dbfs, float mic_peak_dbfs, int speech_pct)
 {
     char buf[256];
     int n = head(buf, sizeof(buf), "env");
+    pmu_status_t ps = {0};
+    pmu_read(&ps);
     snprintf(buf + n, sizeof(buf) - n,
-             ",\"mic_avg\":%.1f,\"mic_peak\":%.1f,\"speech_pct\":%d,\"internal\":%u,\"internal_min\":%u,\"psram\":%u,\"card\":%d}",
+             ",\"mic_avg\":%.1f,\"mic_peak\":%.1f,\"speech_pct\":%d,\"internal\":%u,\"internal_min\":%u,\"psram\":%u,\"card\":%d"
+             ",\"usb\":%d,\"vbat_mv\":%u,\"vsys_mv\":%u,\"charging\":%d}",
              mic_avg_dbfs, mic_peak_dbfs, speech_pct, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-             sdcard_present());
-    sdlog_aux_write(buf);
+             sdcard_present(), ps.vbus_in, ps.vbat_mv, ps.vsys_mv, ps.charging);
+    sdlog_aux_write(0, buf);
 }

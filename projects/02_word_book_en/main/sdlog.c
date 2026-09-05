@@ -35,13 +35,16 @@ static SemaphoreHandle_t s_file_mutex;
 static char s_path[96];
 static size_t s_written;
 
-/* Aux channel: own ring, same drain task and mutex. */
+/* Aux channels: own rings, same drain task and mutex. */
 #define AUX_RING_BYTES (32 * 1024)
-static char *s_aux_ring;
-static volatile size_t s_aux_head, s_aux_tail;
-static size_t s_aux_dropped;
-static FILE *s_aux_file;
-static char s_aux_path[96];
+typedef struct {
+    char *ring;
+    volatile size_t head, tail;
+    size_t dropped, written;
+    FILE *file;
+    char path[96];
+} aux_t;
+static aux_t s_aux[SDLOG_AUX_CHANNELS];
 
 static void push(char *ring, size_t cap, volatile size_t *head, volatile size_t *tail, size_t *dropped,
                  const char *s, size_t n)
@@ -123,10 +126,13 @@ static void drain_task(void *arg)
     (void)arg;
     char chunk[1024];
     int64_t last_sync = 0;
-    size_t aux_written = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(DRAIN_MS));
-        if (s_file == NULL && s_aux_file == NULL) {
+        bool any = s_file != NULL;
+        for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+            any |= s_aux[c].file != NULL;
+        }
+        if (!any) {
             continue;
         }
         if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -136,17 +142,21 @@ static void drain_task(void *arg)
         if (s_file && !drain(s_ring, RING_BYTES, &s_head, &s_tail, s_file, chunk, sizeof(chunk), &s_written)) {
             failed = true;
         }
-        if (s_aux_file && s_aux_ring &&
-            !drain(s_aux_ring, AUX_RING_BYTES, &s_aux_head, &s_aux_tail, s_aux_file, chunk, sizeof(chunk), &aux_written)) {
-            failed = true;
+        for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+            aux_t *x = &s_aux[c];
+            if (x->file && x->ring && !drain(x->ring, AUX_RING_BYTES, &x->head, &x->tail, x->file, chunk, sizeof(chunk), &x->written)) {
+                failed = true;
+            }
         }
         if (!failed && esp_timer_get_time() - last_sync > SYNC_MS * 1000) {
             last_sync = esp_timer_get_time();
             if (s_file && (fflush(s_file) != 0 || fsync(fileno(s_file)) != 0)) {
                 failed = true;
             }
-            if (s_aux_file && (fflush(s_aux_file) != 0 || fsync(fileno(s_aux_file)) != 0)) {
-                failed = true;
+            for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+                if (s_aux[c].file && (fflush(s_aux[c].file) != 0 || fsync(fileno(s_aux[c].file)) != 0)) {
+                    failed = true;
+                }
             }
         }
         if (failed) {
@@ -154,9 +164,11 @@ static void drain_task(void *arg)
                 fclose(s_file);
                 s_file = NULL;
             }
-            if (s_aux_file) {
-                fclose(s_aux_file);
-                s_aux_file = NULL;
+            for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+                if (s_aux[c].file) {
+                    fclose(s_aux[c].file);
+                    s_aux[c].file = NULL;
+                }
             }
             xSemaphoreGive(s_file_mutex);
             ESP_LOGW(TAG, "write to the card failed; log files closed");
@@ -170,7 +182,9 @@ static void drain_task(void *arg)
 void sdlog_init(void)
 {
     s_ring = heap_caps_malloc(RING_BYTES, MALLOC_CAP_SPIRAM);
-    s_aux_ring = heap_caps_malloc(AUX_RING_BYTES, MALLOC_CAP_SPIRAM);
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        s_aux[c].ring = heap_caps_malloc(AUX_RING_BYTES, MALLOC_CAP_SPIRAM);
+    }
     s_file_mutex = xSemaphoreCreateMutex();
     if (s_ring == NULL || s_file_mutex == NULL) {
         ESP_LOGE(TAG, "no memory for the log ring; SD logging off");
@@ -280,15 +294,16 @@ static void rotate(const char *path)
     }
 }
 
-esp_err_t sdlog_aux_open(const char *path)
+esp_err_t sdlog_aux_open(int ch, const char *path)
 {
-    if (s_aux_ring == NULL || s_file_mutex == NULL) {
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS || s_aux[ch].ring == NULL || s_file_mutex == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
+    aux_t *x = &s_aux[ch];
     if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
-    if (s_aux_file != NULL) {
+    if (x->file != NULL) {
         xSemaphoreGive(s_file_mutex);
         return ESP_OK;
     }
@@ -299,63 +314,66 @@ esp_err_t sdlog_aux_open(const char *path)
         ESP_LOGW(TAG, "cannot open %s for append", path);
         return ESP_FAIL;
     }
-    strlcpy(s_aux_path, path, sizeof(s_aux_path));
-    s_aux_file = f;
+    strlcpy(x->path, path, sizeof(x->path));
+    x->file = f;
     xSemaphoreGive(s_file_mutex);
     ESP_LOGI(TAG, "appending records to %s", path);
     return ESP_OK;
 }
 
-void sdlog_aux_close(void)
+void sdlog_aux_close(int ch)
 {
-    if (s_file_mutex == NULL || xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS || s_file_mutex == NULL || xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         return;
     }
-    if (s_aux_file != NULL) {
-        fclose(s_aux_file);
-        s_aux_file = NULL;
-        ESP_LOGI(TAG, "record file closed");
+    aux_t *x = &s_aux[ch];
+    if (x->file != NULL) {
+        fclose(x->file);
+        x->file = NULL;
+        ESP_LOGI(TAG, "record file %d closed", ch);
     }
     xSemaphoreGive(s_file_mutex);
 }
 
-void sdlog_aux_write(const char *line)
+void sdlog_aux_write(int ch, const char *line)
 {
-    if (s_aux_ring == NULL) {
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS || s_aux[ch].ring == NULL) {
         return;
     }
-    size_t n = strlen(line);
-    push(s_aux_ring, AUX_RING_BYTES, &s_aux_head, &s_aux_tail, &s_aux_dropped, line, n);
-    push(s_aux_ring, AUX_RING_BYTES, &s_aux_head, &s_aux_tail, &s_aux_dropped, "\n", 1);
+    aux_t *x = &s_aux[ch];
+    push(x->ring, AUX_RING_BYTES, &x->head, &x->tail, &x->dropped, line, strlen(line));
+    push(x->ring, AUX_RING_BYTES, &x->head, &x->tail, &x->dropped, "\n", 1);
 }
 
-bool sdlog_aux_active(void)
+bool sdlog_aux_active(int ch)
 {
-    return s_aux_file != NULL;
+    return ch >= 0 && ch < SDLOG_AUX_CHANNELS && s_aux[ch].file != NULL;
 }
 
-const char *sdlog_aux_path(void)
+const char *sdlog_aux_path(int ch)
 {
-    return s_aux_path;
+    return (ch >= 0 && ch < SDLOG_AUX_CHANNELS) ? s_aux[ch].path : "";
 }
 
-long sdlog_aux_size(void)
+long sdlog_aux_size(int ch)
 {
     struct stat st;
-    return (s_aux_path[0] && stat(s_aux_path, &st) == 0) ? (long)st.st_size : 0;
+    const char *p = sdlog_aux_path(ch);
+    return (p[0] && stat(p, &st) == 0) ? (long)st.st_size : 0;
 }
 
-esp_err_t sdlog_aux_truncate(void)
+esp_err_t sdlog_aux_truncate(int ch)
 {
-    if (!s_aux_path[0]) {
+    const char *p = sdlog_aux_path(ch);
+    if (!p[0]) {
         return ESP_ERR_INVALID_STATE;
     }
     char path[96];
-    strlcpy(path, s_aux_path, sizeof(path));
-    sdlog_aux_close();
+    strlcpy(path, p, sizeof(path));
+    sdlog_aux_close(ch);
     unlink(path);
     char old[112];
     snprintf(old, sizeof(old), "%s.1", path);
     unlink(old);
-    return sdlog_aux_open(path);
+    return sdlog_aux_open(ch, path);
 }

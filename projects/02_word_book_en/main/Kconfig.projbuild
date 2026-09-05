@@ -12,21 +12,40 @@ menu "Word book"
     config WORDBOOK_MIN_PROB_PCT
         int "Minimum confidence to show a card (%)"
         range 1 99
-        default 20
+        default 25
         help
             Detections below this are ignored. Digital silence produces a fixed
-            junk detection at 13.5%, and a noisy room produced junk up to 17%,
-            so do not go below 18. Adult speech at arm's length scored 16-53%
-            across ten words. Tune on the child, from the SD card log.
+            junk detection at 13.5%; a lived-in room with 19 words produced 90
+            accepted noise detections in 45 minutes at a 20% floor, median 25%.
+            Adult speech at arm's length scored 16-53% across ten words. Tune on
+            the child, from the classifier records on the card.
+
+    config WORDBOOK_VAD_ENERGY_DBFS
+        int "VAD energy floor (dBFS, negative)"
+        range -100 -10
+        default -48
+        help
+            Frames quieter than this are never speech, whatever the VAD model
+            thinks. A lived-in room measured -52 dBFS average; a voice at arm's
+            length is well above -48. Only applies with the vadnet model.
 
     config WORDBOOK_SOUND_PROB_PCT
         int "Minimum confidence for the chime and prompt (%)"
         range 1 99
-        default 35
+        default 45
         help
             Between MIN_PROB and this, the card is shown silently. At or above
             it, the chime and the recorded prompt play too. A wrong card is
-            cheap; a wrong sound is what makes a toy feel broken.
+            cheap; a wrong sound is what makes a toy feel broken. 35% let 13
+            noise chimes through in 45 minutes.
+
+    config WORDBOOK_SOUND
+        bool "Play the chime and prompts"
+        default y
+        help
+            Off: cards still show, nothing is ever played - self-test included.
+            Kept off in sdkconfig.defaults while the false-positive rate is being
+            tuned from the classifier records.
 
     config WORDBOOK_VOLUME
         int "Speaker volume (0-100)"
@@ -102,6 +121,11 @@ menu "Word book"
         help
             Set to the laptop's address to see from the board's side whether the
             two can reach each other. Empty disables it. The gateway is always pinged.
+
+    config WORDBOOK_POWER_LOG_S
+        int "Seconds between power records"
+        range 5 3600
+        default 30
 
     config WORDBOOK_MAINT_IDLE_MIN
         int "Minutes without a request before maintenance mode ends"

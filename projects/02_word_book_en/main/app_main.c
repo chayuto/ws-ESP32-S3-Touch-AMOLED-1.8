@@ -32,6 +32,7 @@
 #include "lvgl.h"
 #include "photo.h"
 #include "player.h"
+#include "pmu.h"
 #include "recognizer.h"
 #include "sdcard.h"
 #include "sdlog.h"
@@ -40,9 +41,17 @@
 
 static const char *TAG = "wordbook";
 
+/* A Kconfig bool that is off has no #define at all. */
+#ifdef CONFIG_WORDBOOK_SOUND
+#define SOUND_ON 1
+#else
+#define SOUND_ON 0
+#endif
+
 #define BOOK_DIR BSP_SD_MOUNT_POINT "/book"
 #define LOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.log"
 #define CLOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.classifier.jsonl"
+#define PLOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.power.jsonl"
 
 /* Self-test clips: macOS `say` at 16 kHz mono, padded with silence, raw PCM. */
 extern const uint8_t clip_dog_start[] asm("_binary_dog_pcm_start");
@@ -215,12 +224,12 @@ static void on_word(const word_event_t *ev)
     }
     bool confident = ev->prob >= CONFIG_WORDBOOK_SOUND_PROB_PCT / 100.0f;
     ESP_LOGI(TAG, "heard '%s' prob=%.3f -> %s card, %s", w.text, ev->prob, w.photo[0] ? "photo" : "text",
-             confident ? "with sound" : "silent (below sound threshold)");
+             !SOUND_ON ? "silent (sound off)" : confident ? "with sound" : "silent (below sound threshold)");
     wake_screen();
     if (!cards_show_word(&w, ev->prob, s_heard) && w.photo[0]) {
         sdcard_report_io_error();
     }
-    if (!confident) {
+    if (!confident || !SOUND_ON) {
         return;
     }
     player_chime();
@@ -257,7 +266,9 @@ static void build_defs(int slot)
 static void card_arrived(bool at_boot)
 {
     sdlog_open(LOG_PATH);
-    sdlog_aux_open(CLOG_PATH);
+    sdlog_aux_open(0, CLOG_PATH);
+    sdlog_aux_open(1, PLOG_PATH);
+    pmu_record(at_boot ? "boot" : "card_in");
     int slot = at_boot ? s_active : s_active ^ 1;
     book_t *nb = &s_books[slot];
     book_load(nb, BOOK_DIR);
@@ -287,7 +298,8 @@ static void card_arrived(bool at_boot)
 
 static void card_left(void)
 {
-    sdlog_aux_close();
+    sdlog_aux_close(0);
+    sdlog_aux_close(1);
     sdlog_close();
     s_files_ok = false;
     ESP_LOGW(TAG, "card lost; keeping %u words, text cards until it returns", (unsigned)s_book.count);
@@ -349,9 +361,9 @@ static void self_test(void)
         /* Judge the engine's top guess, not the gated event: this checks the pipeline
          * end to end, while the floor is a tuning choice that changes with vocabulary size
          * (a synthesised "dog" scored 0.72 against 8 words and 0.19 against 10). */
-        word_event_t ev;
+        word_event_t ev = {0};
         wait_for_word(1500, &ev);
-        word_event_t raw;
+        word_event_t raw = {0};
         bool got = recognizer_take_raw(&raw);
         bool ok = got && strcmp(raw.text, c->expect) == 0;
         pass += ok;
@@ -363,7 +375,7 @@ static void self_test(void)
             vTaskDelay(pdMS_TO_TICKS(400)); /* let the pipeline settle after the pause */
         }
         snprintf(line, sizeof(line), "self-test %u/%u: %s -> %s", (unsigned)i + 1, (unsigned)CLIP_COUNT, c->label,
-                 got ? ev.text : "nothing");
+                 got ? raw.text : "nothing"); /* raw, not ev: ev is only filled when a gated event arrived */
         cards_status(line);
     }
     ESP_LOGI(TAG, "self-test: %d/%u clips recognised", pass, (unsigned)CLIP_COUNT);
@@ -439,6 +451,11 @@ void app_main(void)
         }
     }
 
+    /* Power rails before anything that needs them; also tells us USB vs battery. */
+    if (pmu_init() != ESP_OK) {
+        ESP_LOGE(TAG, "AXP2101 not answering; rails left as found");
+    }
+
     /* Clock first, so the log file header and FAT timestamps carry real time. */
     cards_status("setting the clock");
     timesync_at_boot();
@@ -502,8 +519,13 @@ void app_main(void)
                 enter_maint();
             }
         } else if ((bev == BUTTON_SHORT || cmd == 's') && !s_maint) {
+            /* A press on a dark or dimmed screen means "wake up", never "go to sleep":
+             * the same button doing both sent a dimmed board to sleep when a person
+             * was trying to wake it. Sleep only from a fully lit screen. */
             if (s_asleep) {
                 leave_sleep();
+            } else if (s_dimmed) {
+                wake_screen();
             } else {
                 enter_sleep("button");
             }
@@ -557,14 +579,18 @@ void app_main(void)
             enter_sleep("quiet");
             continue;
         }
+        pmu_poll();
         maybe_dim();
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {
             last_beat = xTaskGetTickCount();
             char now[32];
-            ESP_LOGI(TAG, "alive: %s heard=%" PRIu32 " internal=%u psram=%u card=%d files=%d log=%d words=%u screen=%s",
+            pmu_status_t ps = {0};
+            pmu_read(&ps);
+            ESP_LOGI(TAG, "alive: %s heard=%" PRIu32 " internal=%u psram=%u card=%d files=%d log=%d words=%u screen=%s usb=%d vbat=%u%s",
                      timesync_now_str(now, sizeof(now)), s_heard, heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      heap_caps_get_free_size(MALLOC_CAP_SPIRAM), sdcard_present(), s_files_ok, sdlog_active(),
-                     (unsigned)s_book.count, s_asleep ? "off" : s_dimmed ? "dim" : "on");
+                     (unsigned)s_book.count, s_asleep ? "off" : s_dimmed ? "dim" : "on", ps.vbus_in, ps.vbat_mv,
+                     ps.charging ? " charging" : "");
         }
     }
 }

@@ -246,14 +246,13 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
 - **There is no backlight GPIO.** `BSP_LCD_BACKLIGHT`, `BSP_LCD_RST` and `BSP_LCD_TOUCH_RST`
   are all `GPIO_NUM_NC`. Brightness goes through `bsp_display_brightness_set()`, which
   writes a display-controller register. The panel is driven with no reset GPIO at all.
-- **The TCA9554 is not in the display or touch path.** It sits at `0x20` and the BSP
-  exposes `bsp_io_expander_init()`, but the BSP never calls it: `bsp_display_start()`
-  brings up the panel and touch without it — verified by `01_project_template`, which
-  never touches the expander and still gets a working display and a registered indev.
-  Its eight lines are labelled `EXIO0`–`EXIO7` on the schematic (a `DSI_PWR_EN` net sits
-  in the same area); what each drives is not yet established. Call `bsp_io_expander_init()`
-  only when you need those lines. Do **not** carry over the C6 sibling's rule that the
-  expander gates the display and touch rails — true on that board, not this one.
+- **The TCA9554 holds the display and touch reset lines — but its power-on default
+  releases them.** The schematic text (2026-09-06) puts `LCD_RESET` on `EXIO0` and
+  `TP_RESET` on `EXIO2`. The BSP never initialises the expander and `bsp_display_start()`
+  still works, because a TCA9554 powers up with all pins as inputs (weak pull-up), so the
+  resets float released. Drive them only if you need a real reset; otherwise leave the
+  expander alone. (An earlier note here said the expander was "not in the display path";
+  it is, passively.)
 - **Bring the display up yourself if the project has Wi-Fi.** `bsp_display_start()`
   allocates LVGL's draw buffer with `MALLOC_CAP_DEFAULT` and ignores the DMA/PSRAM flags
   it is handed; under RAM pressure the buffer lands in PSRAM and every SPI flush then
@@ -287,6 +286,9 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
 - **PSRAM is 8 MB octal** — full framebuffers and LVGL buffers belong there.
   368×448×2 bytes = 330 KB per full-screen RGB565 buffer, which does not fit comfortably
   in internal RAM.
+- **Never flash while a person is using the board.** The flash resets it; the screen
+  goes dark for seven seconds and the self-test runs. Done once mid-use on 2026-09-06 and
+  it looked like a fault. Ask for a "go" first.
 - **One reset at a time. Never two host-driven resets within ten seconds.** Twice on
   2026-09-05 the board wedged — black screen, zero console bytes, ROM not answering
   esptool, USB still enumerated — each time right after `idf.py flash`'s `hard_reset`
@@ -294,8 +296,12 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
   USB-Serial-JTAG DTR/RTS emulation). **Flash with the `flash` skill** (`--after
   watchdog_reset`, no line toggling) **and look at the board with `attach.sh`**, which
   does not reset. `capture.py` only for the boot banner, and only once.
-- **Unplugging USB is not a power cycle.** The AXP2101 keeps the system up (consistent
-  with a battery on the MX1.25 header; USB session ID was unchanged after a cable pull).
+- **There is a battery, and unplugging USB is not a power cycle.** Measured 2026-09-06
+  via the AXP2101: battery present, 4.12 V, 100 %, system 4.36 V on USB. The board ran
+  92 minutes straight through an unplug and replug. Consequences: a "dark screen" on an
+  unplugged board is a *running* board (dim, asleep, or a rail problem), and a wedge
+  needs PWR, not the cable. `02_word_book_en` logs every rail and the battery state at
+  boot, in the heartbeat, in a timed power record file, and on every VBUS change.
   **Recovery from a wedge: hold PWR 8–10 s, release, press once.** If the flashed image
   is crash-looping, power up **into download mode** instead — hold BOOT while pressing
   PWR, keep BOOT ~2 s — so nothing runs and esptool can connect. Every such recovery is
@@ -303,6 +309,26 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
   `02_word_book_en` drops into a safe mode after three consecutive crashes.
 - **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
   backup before any flash that you cannot otherwise undo.
+
+## Power Rails (AXP2101, read back 2026-09-06 on USB)
+
+| Rail | Setting | Schematic net / use |
+|---|---|---|
+| DCDC1 | 3.3 V on | `VCC3V3`, the main rail |
+| DCDC2, 3, 4 | on | DCDC3 ≈ 1.2 V (ESP32-S3 core per the schematic's power table) |
+| DCDC5 | off | |
+| ALDO1 | 3.3 V on | `VL1_3.3V` — the vendor sketches switch ALDO1/2 on at boot and off for sleep |
+| ALDO2 | 3.3 V on | `VL2_3.3V` |
+| ALDO3 | 3.0 V on | `VL3_3.3V` area, near `EXIO0`/`LCD_RESET` |
+| ALDO4 | 1.8 V on | 1.8 V rail |
+| BLDO1 | 1.2 V on | |
+| BLDO2 | 2.8 V on | a panel-class voltage |
+| CPUSLDO | 1.2 V | |
+| DLDO1/2 | 0.5 V (unused) | |
+
+`02_word_book_en/main/pmu.c` is the reader; it also sets ALDO1/ALDO2 to 3.3 V at boot as
+the vendor does. Which rail, if any, drops on battery is **not yet known** — the power
+record file catches it on the next unplug.
 
 ## Memory Budget (measured, not estimated)
 

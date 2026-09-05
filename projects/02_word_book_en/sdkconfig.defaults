@@ -36,6 +36,13 @@ CONFIG_LV_FONT_MONTSERRAT_28=y
 # the WebRTC defaults for now.
 CONFIG_MODEL_IN_FLASH=y
 CONFIG_SR_MN_EN_MULTINET7_QUANT=y
+# Neural VAD (288 KB in the model partition) - the WebRTC one called a quiet room speech.
+CONFIG_SR_VADN_VADNET1_MEDIUM=y
+# No noise suppression: nsnet2 in the SR pipeline flattened speech to noise for
+# MultiNet (synthetic clips 0/3, a live voice unrecognised), and Espressif's SR
+# type is documented as "excluding nonlinear noise suppression". The neural VAD
+# with its energy floor is what removed the room-noise false positives.
+CONFIG_SR_NSN_WEBRTC=y
 
 # Big word on the text cards.
 CONFIG_LV_FONT_MONTSERRAT_48=y
@@ -83,3 +90,6 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 # app_main does the book scan, recogniser start and the classifier session record on
 # the main task; 3.5 KB is too close. 
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Silent while the false-positive rate is being tuned. Flip to y deliberately.
+CONFIG_WORDBOOK_SOUND=n
