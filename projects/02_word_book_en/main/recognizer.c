@@ -71,6 +71,11 @@ static volatile size_t s_pending_count;
 
 static void apply_words(const word_def_t *words, size_t count);
 
+static volatile bool s_stop;
+static TaskHandle_t s_feed_task, s_detect_task;
+static float s_mic_avg = -120, s_mic_peak = -120;
+static int s_mic_speech;
+
 static word_event_t s_raw;
 static volatile bool s_raw_valid;
 
@@ -89,7 +94,7 @@ static void feed_task(void *arg)
     ESP_LOGI(TAG, "feed: %d samples x %d ch per chunk (%u bytes), core %d", chunk, channels, (unsigned)bytes,
              xPortGetCoreID());
 
-    for (;;) {
+    while (!s_stop) {
         if (s_inject_samples != NULL) {
             /* Feed the clip chunk by chunk, zero-padding the tail. */
             size_t left = s_inject_count - s_inject_pos;
@@ -121,6 +126,9 @@ static void feed_task(void *arg)
         }
         s_afe->feed(s_afe_data, buf);
     }
+    free(buf);
+    s_feed_task = NULL;
+    vTaskDelete(NULL);
 }
 
 static void detect_task(void *arg)
@@ -137,8 +145,8 @@ static void detect_task(void *arg)
     /* Ambient level report every ~5 s: what the recogniser is actually hearing. */
     float lvl_sum = 0, lvl_max = -120;
     uint32_t lvl_n = 0, lvl_speech = 0;
-    for (;;) {
-        afe_fetch_result_t *res = s_afe->fetch(s_afe_data);
+    while (!s_stop) {
+        afe_fetch_result_t *res = s_afe->fetch_with_delay(s_afe_data, pdMS_TO_TICKS(200));
         if (res == NULL || res->ret_value == ESP_FAIL) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
@@ -152,8 +160,10 @@ static void detect_task(void *arg)
             lvl_n++;
             lvl_speech += (res->vad_state == VAD_SPEECH);
             if (lvl_n >= 156) { /* 156 x 32 ms = 5 s */
-                ESP_LOGI(TAG, "mic: avg %.1f dBFS, peak %.1f dBFS, vad speech %lu%% of last 5 s", lvl_sum / lvl_n, lvl_max,
-                         (unsigned long)(lvl_speech * 100 / lvl_n));
+                s_mic_avg = lvl_sum / lvl_n;
+                s_mic_peak = lvl_max;
+                s_mic_speech = (int)(lvl_speech * 100 / lvl_n);
+                ESP_LOGI(TAG, "mic: avg %.1f dBFS, peak %.1f dBFS, vad speech %d%% of last 5 s", s_mic_avg, s_mic_peak, s_mic_speech);
                 lvl_sum = 0; lvl_max = -120; lvl_n = 0; lvl_speech = 0;
             }
         }
@@ -213,6 +223,8 @@ static void detect_task(void *arg)
             s_mn->clean(s_mn_data);
         }
     }
+    s_detect_task = NULL;
+    vTaskDelete(NULL);
 }
 
 /* Load a word list into MultiNet. Only ever called from the task that owns the model. */
@@ -240,12 +252,31 @@ static void apply_words(const word_def_t *words, size_t count)
     ESP_LOGI(TAG, "vocabulary: %u of %u words loaded", (unsigned)loaded, (unsigned)count);
 }
 
+static void start_tasks(void)
+{
+    s_stop = false;
+    s_paused = false;
+    s_flush = false;
+    s_pending_words = NULL;
+    xTaskCreatePinnedToCore(feed_task, "sr_feed", 6144, NULL, FEED_PRIO, &s_feed_task, RECOG_CORE);
+    xTaskCreatePinnedToCore(detect_task, "sr_detect", 8192, NULL, DETECT_PRIO, &s_detect_task, RECOG_CORE);
+}
+
 esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, size_t count, QueueHandle_t out)
 {
     s_mic = mic;
+    s_out = out;
+    if (s_afe_data != NULL) {
+        /* Restart after a stop: engine is live, no task runs, so the words go straight in. */
+        apply_words(words, count);
+        s_afe->reset_buffer(s_afe_data);
+        s_mn->clean(s_mn_data);
+        start_tasks();
+        ESP_LOGI(TAG, "restarted: listening for %u words", (unsigned)count);
+        return ESP_OK;
+    }
     s_words = words;
     s_word_count = count;
-    s_out = out;
 
     size_t internal_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t psram_before = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -296,8 +327,7 @@ esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, 
              (unsigned)(internal_before - internal_after), (unsigned)internal_after,
              (unsigned)(psram_before - psram_after), (unsigned)psram_after);
 
-    xTaskCreatePinnedToCore(feed_task, "sr_feed", 6144, NULL, FEED_PRIO, NULL, RECOG_CORE);
-    xTaskCreatePinnedToCore(detect_task, "sr_detect", 8192, NULL, DETECT_PRIO, NULL, RECOG_CORE);
+    start_tasks();
     ESP_LOGI(TAG, "listening for %u words, no wake word", (unsigned)count);
     return ESP_OK;
 }
@@ -349,4 +379,34 @@ bool recognizer_take_raw(word_event_t *out)
     *out = s_raw;
     s_raw_valid = false;
     return true;
+}
+
+void recognizer_stop(void)
+{
+    if (s_afe_data == NULL || (s_feed_task == NULL && s_detect_task == NULL)) {
+        return;
+    }
+    size_t before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    s_stop = true;
+    for (int i = 0; i < 50 && (s_feed_task || s_detect_task); i++) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (s_feed_task || s_detect_task) {
+        ESP_LOGW(TAG, "tasks did not exit; deleting them");
+        if (s_feed_task) vTaskDelete(s_feed_task);
+        if (s_detect_task) vTaskDelete(s_detect_task);
+        s_feed_task = s_detect_task = NULL;
+    }
+    s_inject_samples = NULL;
+    /* The AFE and MultiNet stay allocated: MultiNet7's destroy() double-frees
+     * (assert in tlsf from multinet7_quantized.c:346, heap verified clean before
+     * the call), so the engine is built once per boot and only its tasks stop. */
+    ESP_LOGI(TAG, "tasks stopped, engine kept; internal +%d B", (int)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) - before));
+}
+
+void recognizer_mic_level(float *avg_dbfs, float *peak_dbfs, int *speech_pct)
+{
+    if (avg_dbfs) *avg_dbfs = s_mic_avg;
+    if (peak_dbfs) *peak_dbfs = s_mic_peak;
+    if (speech_pct) *speech_pct = s_mic_speech;
 }

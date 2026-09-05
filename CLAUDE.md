@@ -91,7 +91,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 ├── README.md
 ├── .claude/
 │   ├── commands/             # /build /flash /monitor /hardware-specs /peripherals /restore-factory
-│   └── skills/               # new-project, serial-capture, flash
+│   └── skills/               # new-project, serial-capture, flash, agentic-logging
 ├── .gitignore                # excludes /ref/, build/, sdkconfig, managed_components/
 ├── docs/
 │   ├── research/             # lab notes and surveys (bringup-20260905.md is the founding one)
@@ -200,6 +200,12 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
 - Keep "Not Yet Verified on Hardware" at the bottom of this file honest and current. It is
   the most useful section here, because it is the one that stops false assumptions.
 
+### Logging
+
+Every project logs for the agent first — see the `agentic-logging` skill. DEBUG compiled
+in, own tags at DEBUG, nothing muted, a heartbeat with numbers, decisions logged with
+their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodgates.
+
 ### Skills and commands
 
 `.claude/skills/` holds the workflows worth invoking by name:
@@ -209,6 +215,7 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
 | `new-project` | Scaffolding a new project from `01_project_template` with the verified board config |
 | `serial-capture` | `attach.sh` reads the console without resetting; `capture.py` resets for a boot banner |
 | `flash` | Flashing with a watchdog reset instead of DTR/RTS, and what not to do afterwards |
+| `agentic-logging` | How projects log so the agent sees everything: levels, tags, heartbeat, flight recorder, serial commands, safe mode |
 
 `.claude/commands/` holds the slash-command references: `/build`, `/flash`, `/monitor`,
 `/hardware-specs`, `/peripherals`, `/restore-factory`.
@@ -234,14 +241,25 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
   in the same area); what each drives is not yet established. Call `bsp_io_expander_init()`
   only when you need those lines. Do **not** carry over the C6 sibling's rule that the
   expander gates the display and touch rails — true on that board, not this one.
-- **Keep LVGL's draw buffer in internal RAM.** The BSP allocates it with plain
-  `MALLOC_CAP_DEFAULT` and ignores the DMA/PSRAM flags it is handed, so anything above
-  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` lands in PSRAM — and then every SPI flush needs an
-  internal DMA bounce buffer the size of the transfer. With Wi-Fi's pools resident that
-  allocation failed (`spi_master: Failed to allocate priv TX buffer`, screen frozen).
-  Fix that works: `CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=40` (29 KB) with
-  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=32768`, so the buffer is internal and DMA-capable
-  with no bounce at all. `02_word_book_en` carries this; any project adding Wi-Fi will need it.
+- **Bring the display up yourself if the project has Wi-Fi.** `bsp_display_start()`
+  allocates LVGL's draw buffer with `MALLOC_CAP_DEFAULT` and ignores the DMA/PSRAM flags
+  it is handed; under RAM pressure the buffer lands in PSRAM and every SPI flush then
+  needs an internal DMA bounce buffer, which fails (`spi_master: Failed to allocate priv
+  TX buffer`, screen frozen). Kconfig tweaks only moved the failure. What works:
+  `lvgl_port_init` → `bsp_display_new` → `lvgl_port_add_disp` with `buff_dma = true` and a
+  20-line buffer (14.7 KB, internal) → `bsp_touch_new` + `lvgl_port_add_touch` —
+  `cards_display_start()` in `02_word_book_en`, ~40 lines. Verified: zero flush errors
+  with Wi-Fi, HTTP and the recogniser all resident.
+- **Wi-Fi station: `esp_wifi_set_ps(WIFI_PS_NONE)` if the board serves anything.** With
+  power-save on (the default) the board joined, got an IP, answered ARP — and dropped
+  every ping and TCP connect from the LAN. Off, everything answered at once.
+- **MultiNet7's `destroy()` double-frees** (tlsf assert from `multinet7_quantized.c:346`
+  with the heap verified clean beforehand, in either order relative to
+  `esp_mn_commands_free()`). Build the engine once per boot and only stop its tasks.
+- **A log hook must not use the caller's stack.** The SD flight-recorder hook runs on
+  every task that logs; a 512-byte stack buffer overflowed the 2.3 KB system event task
+  the moment DEBUG lines were compiled in. Static buffer under esp_log's lock, and
+  `CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096`.
 - **Touch LVGL only under the lock.** `bsp_display_lock(timeout_ms)` /
   `bsp_display_unlock()` around every LVGL call made outside an LVGL event callback.
   The LVGL task runs on its own; unlocked access from another task will corrupt it.

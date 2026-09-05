@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "esp_app_desc.h"
@@ -49,6 +50,11 @@ static void ring_push(const char *s, size_t n)
     portEXIT_CRITICAL(&s_lock);
 }
 
+/* One static line buffer: esp_log serialises vprintf calls under its own lock, and
+ * a stack buffer here would land on every logging task's stack - the 2 KB system
+ * event task overflowed on it once DEBUG lines were compiled in. */
+static char s_line[LOG_LINE_MAX];
+
 static int hook(const char *fmt, va_list args)
 {
     va_list copy;
@@ -56,11 +62,11 @@ static int hook(const char *fmt, va_list args)
     int ret = s_console(fmt, args); /* console first, exactly as before */
 
     if (s_ring != NULL && !xPortInIsrContext()) {
-        char line[LOG_LINE_MAX];
-        int n = vsnprintf(line, sizeof(line), fmt, copy);
+        char *line = s_line;
+        int n = vsnprintf(line, LOG_LINE_MAX, fmt, copy);
         if (n > 0) {
-            if (n >= (int)sizeof(line)) {
-                n = sizeof(line) - 1;
+            if (n >= LOG_LINE_MAX) {
+                n = LOG_LINE_MAX - 1;
             }
             ring_push(line, (size_t)n);
         }
@@ -143,6 +149,16 @@ esp_err_t sdlog_open(const char *path)
         xSemaphoreGive(s_file_mutex);
         return ESP_OK;
     }
+    /* Rotate: over the cap, the old file becomes <path>.1 (replacing the previous .1). */
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > (long)CONFIG_WORDBOOK_LOG_MAX_KB * 1024) {
+        char old[112];
+        snprintf(old, sizeof(old), "%s.1", path);
+        unlink(old);
+        if (rename(path, old) == 0) {
+            ESP_LOGI(TAG, "rotated %s (%ld bytes) to %s", path, (long)st.st_size, old);
+        }
+    }
     FILE *f = fopen(path, "a");
     if (f == NULL) {
         xSemaphoreGive(s_file_mutex);
@@ -177,4 +193,32 @@ void sdlog_close(void)
 bool sdlog_active(void)
 {
     return s_file != NULL;
+}
+
+const char *sdlog_path(void)
+{
+    return s_path;
+}
+
+long sdlog_size(void)
+{
+    struct stat st;
+    return (s_path[0] && stat(s_path, &st) == 0) ? (long)st.st_size : 0;
+}
+
+esp_err_t sdlog_truncate(void)
+{
+    if (!s_path[0]) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char path[96];
+    strlcpy(path, s_path, sizeof(path));
+    sdlog_close();
+    unlink(path);
+    char old[112];
+    snprintf(old, sizeof(old), "%s.1", path);
+    unlink(old);
+    esp_err_t err = sdlog_open(path);
+    ESP_LOGI(TAG, "log truncated");
+    return err;
 }

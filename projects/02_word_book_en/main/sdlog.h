@@ -22,3 +22,10 @@ void sdlog_close(void);
 
 /* True while a log file is open on the card. */
 bool sdlog_active(void);
+
+/* Current file's path and size in bytes (0 if none). */
+const char *sdlog_path(void);
+long sdlog_size(void);
+
+/* Empty the current log file and start it again with a fresh boot header. */
+esp_err_t sdlog_truncate(void);

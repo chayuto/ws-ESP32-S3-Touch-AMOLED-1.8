@@ -3,8 +3,17 @@
 #include <stdint.h>
 
 #include "book.h"
+#include "lvgl.h"
 
 typedef void (*cards_tap_cb_t)(void);
+
+/*
+ * Bring up the panel, touch and LVGL with a draw buffer in internal, DMA-capable
+ * RAM. bsp_display_start() puts the buffer wherever MALLOC_CAP_DEFAULT lands it,
+ * which with PSRAM enabled means PSRAM and a bounce buffer per flush; under RAM
+ * pressure that allocation fails and the screen freezes. Returns the display.
+ */
+lv_display_t *cards_display_start(void);
 
 /* Build the screen. Call under the display lock. `on_tap` fires from the LVGL task. */
 void cards_init(cards_tap_cb_t on_tap);
@@ -18,6 +27,9 @@ void cards_show_idle(void);
  * Takes the display lock itself. Photo load is from file into PSRAM.
  */
 bool cards_show_word(const book_word_t *word, float confidence, unsigned nth);
+
+/* A plain card: big title, smaller detail line. For maintenance mode and the like. */
+void cards_show_info(const char *title, const char *detail);
 
 /* Show an already-filled PHOTO_BYTES RGB565 buffer as a card, with a caption. */
 void cards_show_buffer(const uint8_t *rgb565, const char *caption);

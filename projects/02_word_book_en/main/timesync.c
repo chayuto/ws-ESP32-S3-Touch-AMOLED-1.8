@@ -11,13 +11,9 @@
 #include "sdkconfig.h"
 
 #if CONFIG_WORDBOOK_NTP
-#include "esp_event.h"
-#include "esp_netif.h"
 #include "esp_netif_sntp.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
-#include "nvs_flash.h"
+#include "wifi_sta.h"
 #endif
 
 static const char *TAG = "time";
@@ -86,76 +82,26 @@ static void write_rtc_from_clock(void)
 }
 
 #if CONFIG_WORDBOOK_NTP
-static EventGroupHandle_t s_ev;
-#define GOT_IP BIT0
-#define FAILED BIT1
-
-static void wifi_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupSetBits(s_ev, FAILED);
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        xEventGroupSetBits(s_ev, GOT_IP);
-    }
-}
-
 static bool from_ntp(void)
 {
-    if (strlen(CONFIG_WORDBOOK_WIFI_SSID) == 0) {
-        ESP_LOGI(TAG, "no Wi-Fi configured; skipping NTP");
+    if (!wifi_sta_join(CONFIG_WORDBOOK_NTP_TIMEOUT_S)) {
         return false;
     }
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_t *sta = esp_netif_create_default_wifi_sta();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    s_ev = xEventGroupCreate();
-    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_evt, NULL);
-    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_evt, NULL);
-
-    wifi_config_t wc = {0};
-    strlcpy((char *)wc.sta.ssid, CONFIG_WORDBOOK_WIFI_SSID, sizeof(wc.sta.ssid));
-    strlcpy((char *)wc.sta.password, CONFIG_WORDBOOK_WIFI_PASSWORD, sizeof(wc.sta.password));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "joining '%s' for NTP (up to %d s)...", CONFIG_WORDBOOK_WIFI_SSID, CONFIG_WORDBOOK_NTP_TIMEOUT_S);
-
     bool ok = false;
-    EventBits_t bits = xEventGroupWaitBits(s_ev, GOT_IP | FAILED, pdTRUE, pdFALSE,
-                                           pdMS_TO_TICKS(CONFIG_WORDBOOK_NTP_TIMEOUT_S * 1000));
-    if (bits & GOT_IP) {
-        esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_WORDBOOK_NTP_SERVER);
-        esp_netif_sntp_init(&sc);
-        if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) == ESP_OK) {
-            setenv("TZ", CONFIG_WORDBOOK_TZ, 1);
-            tzset();
-            char buf[32];
-            ESP_LOGI(TAG, "clock set from NTP (%s): %s", CONFIG_WORDBOOK_NTP_SERVER, timesync_now_str(buf, sizeof(buf)));
-            write_rtc_from_clock();
-            ok = true;
-        } else {
-            ESP_LOGW(TAG, "joined Wi-Fi but NTP did not answer");
-        }
-        esp_netif_sntp_deinit();
+    esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_WORDBOOK_NTP_SERVER);
+    esp_netif_sntp_init(&sc);
+    if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) == ESP_OK) {
+        setenv("TZ", CONFIG_WORDBOOK_TZ, 1);
+        tzset();
+        char buf[32];
+        ESP_LOGI(TAG, "clock set from NTP (%s): %s", CONFIG_WORDBOOK_NTP_SERVER, timesync_now_str(buf, sizeof(buf)));
+        write_rtc_from_clock();
+        ok = true;
     } else {
-        ESP_LOGW(TAG, "Wi-Fi '%s' not joined (%s)", CONFIG_WORDBOOK_WIFI_SSID, (bits & FAILED) ? "rejected or not found" : "timeout");
+        ESP_LOGW(TAG, "joined Wi-Fi but NTP did not answer");
     }
-
-    /* Radio off, memory back. The rest of the app never needs Wi-Fi. */
-    esp_wifi_stop();
-    esp_wifi_deinit();
-    esp_netif_destroy_default_wifi(sta);
-    vEventGroupDelete(s_ev);
+    esp_netif_sntp_deinit();
+    wifi_sta_leave(); /* the rest of boot never needs the radio */
     return ok;
 }
 #endif

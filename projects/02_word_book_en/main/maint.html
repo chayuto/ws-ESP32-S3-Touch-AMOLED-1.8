@@ -1,0 +1,71 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>word book</title>
+<style>
+body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#111;color:#eee}
+h1{font-size:20px;margin:16px}h2{font-size:15px;color:#9ab;margin:20px 16px 8px}
+#drop{margin:0 16px;padding:26px;border:2px dashed #456;border-radius:12px;text-align:center;color:#9ab}
+#drop.over{border-color:#6cf;color:#6cf}
+#drop input{display:none}
+table{border-collapse:collapse;margin:0 16px;width:calc(100% - 32px)}td{padding:6px 8px;border-bottom:1px solid #222}
+td.n{font-family:ui-monospace,monospace}td.r{text-align:right;color:#9ab}
+button{font:inherit;padding:6px 12px;border-radius:8px;border:0;background:#345;color:#eee;cursor:pointer}
+button.x{background:#522}button.p{background:#6cf;color:#000}
+#msg{margin:8px 16px;color:#fc6;min-height:1.2em}
+pre{margin:0 16px;background:#000;color:#9c9;padding:10px;border-radius:8px;font-size:12px;max-height:40vh;overflow:auto;white-space:pre-wrap}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:0 16px 8px}
+dl{margin:0 16px;display:grid;grid-template-columns:max-content 1fr;gap:2px 14px;font-size:14px}dt{color:#9ab}dd{margin:0;font-family:ui-monospace,monospace}
+</style>
+<h1>word book</h1>
+<div id="msg"></div>
+<h2>photos on the card &mdash; the filename is the word</h2>
+<div id="drop">drop <b>dog.jpg</b>, <b>cat.jpg</b> &hellip; here (or tap to choose)<input type="file" accept=".jpg,.jpeg,.wav" multiple></div>
+<table id="files"></table>
+<div class="row"><button onclick="reload()">reload word list on the board</button></div>
+<h2>log</h2>
+<div class="row"><button onclick="tail()">last 200 lines</button><a href="/api/log" download><button>download whole log</button></a><button class="x" onclick="clearLog()">clear log</button></div>
+<pre id="log"></pre>
+<h2>device</h2>
+<dl id="metrics"></dl>
+<div class="row"><button onclick="metrics()">refresh</button><button class="x" onclick="reboot()">reboot</button></div>
+<script>
+const $=s=>document.querySelector(s);
+function say(s){$('#msg').textContent=s}
+function fmt(n){return n>1048576?(n/1048576).toFixed(1)+' MB':n>1024?(n/1024).toFixed(0)+' KB':n+' B'}
+async function list(){
+  const b=await (await fetch('/api/book')).json();
+  const t=$('#files');t.innerHTML='';
+  if(!b.card){t.innerHTML='<tr><td>no SD card in the board</td></tr>';return}
+  for(const f of b.files.sort((a,b)=>a.name.localeCompare(b.name))){
+    const cache=f.name.endsWith('.rgb565');
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="n">${f.name}${cache?' <small style="color:#667">(cache)</small>':''}</td><td class="r">${fmt(f.size)}</td><td class="r"><button class="x">delete</button></td>`;
+    tr.querySelector('button').onclick=async()=>{if(!confirm('delete '+f.name+'?'))return;const r=await fetch('/api/book/'+f.name,{method:'DELETE'});say(r.ok?'deleted '+f.name:'failed');list()};
+    t.appendChild(tr);
+  }
+}
+async function upload(files){
+  for(const f of files){
+    const name=f.name.toLowerCase().replace(/\s+/g,'_');
+    if(!/^[a-z0-9_-]+\.(jpe?g|wav)$/.test(name)){say(f.name+': name must be letters/digits, .jpg or .wav');continue}
+    say('uploading '+name+' ('+fmt(f.size)+')...');
+    const r=await fetch('/api/book/'+name,{method:'PUT',body:f});
+    say(r.ok?name+' saved':name+': '+await r.text());
+  }
+  list();
+}
+const d=$('#drop');
+d.onclick=()=>d.querySelector('input').click();
+d.querySelector('input').onchange=e=>upload(e.target.files);
+d.ondragover=e=>{e.preventDefault();d.classList.add('over')};d.ondragleave=()=>d.classList.remove('over');
+d.ondrop=e=>{e.preventDefault();d.classList.remove('over');upload(e.dataTransfer.files)};
+async function reload(){const r=await fetch('/api/reload',{method:'POST'});say(await r.text())}
+async function tail(){$('#log').textContent=await (await fetch('/api/log?tail=200')).text()}
+async function clearLog(){if(!confirm('clear the log?'))return;const r=await fetch('/api/log',{method:'DELETE'});say(r.ok?'log cleared':'failed');tail()}
+async function metrics(){
+  const m=await (await fetch('/api/metrics')).json();const dl=$('#metrics');dl.innerHTML='';
+  const rows={'time':m.time,'uptime':Math.floor(m.uptime_s/60)+' min','firmware':m.version+' (IDF '+m.idf+')','internal RAM free':fmt(m.internal_free)+' (min '+fmt(m.internal_min_free)+')','PSRAM free':fmt(m.psram_free),'card':m.card?(m.files_ok?'present, book loaded':'present'):'absent','log':m.log_active?fmt(m.log_bytes):'off','words':m.words,'heard':m.heard+(m.last_word?' (last: '+m.last_word+' '+Math.round(m.last_prob*100)+'%)':''),'mic (last 5 s before maintenance)':m.mic_avg_dbfs.toFixed(1)+' dBFS avg, '+m.mic_peak_dbfs.toFixed(1)+' peak, speech '+m.mic_speech_pct+'%','thresholds':'card '+m.min_prob_pct+'%, sound '+m.sound_prob_pct+'%'};
+  for(const k in rows){dl.innerHTML+=`<dt>${k}</dt><dd>${rows[k]}</dd>`}
+}
+async function reboot(){if(!confirm('reboot the board?'))return;await fetch('/api/reboot',{method:'POST'});say('rebooting; this page will stop responding')}
+list();metrics();tail();
+</script>

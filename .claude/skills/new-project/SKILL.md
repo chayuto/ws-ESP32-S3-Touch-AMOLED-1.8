@@ -66,6 +66,15 @@ Then capture serial to confirm it actually runs — see the `serial-capture` ski
 `cpu freq: 240000000 Hz` in the boot log every time; it is the config mistake this board
 makes easiest.
 
+## Log for the agent
+
+Follow the `agentic-logging` skill from the first line: the template already compiles
+DEBUG in and keeps INFO as the default; raise every tag you define to DEBUG in
+`app_main`, add a 10-second heartbeat with real numbers, and log every decision the
+code makes, rejections included. Copy `sdlog.c`, `devcmd.c`, `timesync.c` and
+`pcf85063.c` from `02_word_book_en` for the SD flight recorder, serial commands and a
+real clock.
+
 ## Finish the project properly
 
 - Give it a `README.md` with what it does, how to build it, and the **verified serial

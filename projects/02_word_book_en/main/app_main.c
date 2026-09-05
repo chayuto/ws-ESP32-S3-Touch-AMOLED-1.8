@@ -19,10 +19,12 @@
 #include "button.h"
 #include "bsp/esp-bsp.h"
 #include "cards.h"
+#include "devcmd.h"
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "maint.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -68,11 +70,14 @@ static const clip_t s_clips[] = {
  * full and hands it over; the previous pair stays untouched until the swap
  * after that, which is seconds away at the very least.
  */
+static audio_io_t s_io;
 static book_t s_books[2];
 static word_def_t s_defs[2][BOOK_MAX_WORDS];
 static int s_active;
 #define s_book (s_books[s_active])
 static bool s_files_ok;   /* card present and the book's files reachable */
+static void build_defs(int slot);
+static void card_arrived(bool at_boot);
 static QueueHandle_t s_events;
 static uint32_t s_heard;
 static int s_last_word = -1;
@@ -105,6 +110,62 @@ static void maybe_dim(void)
 static void on_tap(void)
 {
     xSemaphoreGive(s_tap);
+}
+
+/* --- Maintenance: Wi-Fi + HTTP API, recogniser stopped. Long press or 'm' toggles. --- */
+
+static bool s_maint;
+static const char *s_last_word_text;
+static float s_last_prob;
+static void leave_sleep(void);
+static void restart_recognizer(void);
+
+static void maint_state(maint_app_state_t *out)
+{
+    out->heard = s_heard;
+    out->last_word = s_last_word_text;
+    out->last_prob = s_last_prob;
+    out->words = (int)s_book.count;
+    out->files_ok = s_files_ok;
+}
+
+static void enter_maint(void)
+{
+    if (s_maint) {
+        return;
+    }
+    leave_sleep();
+    cards_show_info("setup", "joining Wi-Fi...");
+    cards_status("");
+    recognizer_stop();
+    if (maint_start(maint_state) != ESP_OK) {
+        cards_show_info("setup failed", "no Wi-Fi - see serial");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        restart_recognizer();
+        cards_show_idle();
+        return;
+    }
+    s_maint = true;
+    char line[64];
+    snprintf(line, sizeof(line), "http://%s", maint_ip());
+    cards_show_info("setup", line);
+    cards_status("hold BOOT to finish");
+}
+
+static void leave_maint(void)
+{
+    if (!s_maint) {
+        return;
+    }
+    s_maint = false;
+    maint_stop();
+    if (maint_take_book_changed() && sdcard_present()) {
+        card_arrived(false);
+    }
+    restart_recognizer();
+    wake_screen();
+    cards_show_idle();
+    cards_status("listening");
 }
 
 /* --- Sleep: screen off, ears off. BOOT toggles it; quiet for long enough enters it. --- */
@@ -143,6 +204,8 @@ static void on_word(const word_event_t *ev)
     }
     s_heard++;
     s_last_word = ev->id;
+    s_last_word_text = s_book.words[ev->id].text;
+    s_last_prob = ev->prob;
     book_word_t w = s_book.words[ev->id];
     if (!s_files_ok) {
         /* No card, or it went away: the word still works, on a text card with the chime. */
@@ -170,6 +233,15 @@ static void on_tap_main(void)
 {
     ESP_LOGI(TAG, "tap");
     wake_screen();
+}
+
+static void restart_recognizer(void)
+{
+    build_defs(s_active);
+    if (recognizer_start(s_io.mic, s_defs[s_active], s_book.count, s_events) != ESP_OK) {
+        ESP_LOGE(TAG, "recogniser did not restart");
+        cards_status("recogniser failed - reboot");
+    }
 }
 
 /* Build the word table the recogniser reads from a book. */
@@ -202,9 +274,11 @@ static void card_arrived(bool at_boot)
         ESP_LOGI(TAG, "same %u words as before; photos and prompts now available", (unsigned)s_book.count);
     } else {
         build_defs(slot);
-        recognizer_set_words(s_defs[slot], nb->count);
         s_active = slot;
-        ESP_LOGI(TAG, "new book: %u words; vocabulary swap requested", (unsigned)nb->count);
+        if (!s_maint) {
+            recognizer_set_words(s_defs[slot], nb->count);
+        }
+        ESP_LOGI(TAG, "new book: %u words; vocabulary swap %s", (unsigned)nb->count, s_maint ? "on exit" : "requested");
     }
     s_files_ok = true;
 }
@@ -325,14 +399,18 @@ static bool crash_loop_guard(void)
 void app_main(void)
 {
     sdlog_init(); /* first, so every line below is in the ring before a card is even mounted */
+    /* Our own tags at DEBUG from the first line; third-party stays at the INFO default. */
+    static const char *const own_tags[] = {"wordbook", "recog", "book", "cards", "photo", "player", "sdcard", "sdlog",
+                                           "time", "rtc", "wifi", "maint", "button", "devcmd", "audio_io"};
+    for (size_t i = 0; i < sizeof(own_tags) / sizeof(own_tags[0]); i++) {
+        esp_log_level_set(own_tags[i], ESP_LOG_DEBUG);
+    }
     ESP_LOGI(TAG, "02_word_book_en starting");
     bool safe_mode = crash_loop_guard();
     s_events = xQueueCreate(8, sizeof(word_event_t));
     s_tap = xSemaphoreCreateBinary();
 
-    esp_log_level_set("i2c.master", ESP_LOG_ERROR);
-    lv_display_t *disp = bsp_display_start();
-    esp_log_level_set("i2c.master", ESP_LOG_INFO);
+    lv_display_t *disp = cards_display_start(); /* the i2c.master pull-up warning it logs is benign and stays visible */
     bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
     s_last_activity = xTaskGetTickCount();
     ESP_LOGI(TAG, "display up: %" PRId32 "x%" PRId32, lv_display_get_horizontal_resolution(disp),
@@ -342,6 +420,7 @@ void app_main(void)
         bsp_display_unlock();
     }
     button_init();
+    devcmd_init();
     cards_show_idle();
     cards_status("starting");
 
@@ -367,13 +446,12 @@ void app_main(void)
     }
     build_defs(s_active); /* whichever book ended up active, the recogniser needs its table */
 
-    audio_io_t io = {0};
-    if (audio_io_init(&io) != ESP_OK) {
+    if (audio_io_init(&s_io) != ESP_OK) {
         cards_status("audio init failed - see serial");
         return;
     }
-    player_init(io.spk);
-    if (recognizer_start(io.mic, s_defs[s_active], s_book.count, s_events) != ESP_OK) {
+    player_init(s_io.spk);
+    if (recognizer_start(s_io.mic, s_defs[s_active], s_book.count, s_events) != ESP_OK) {
         cards_status("recogniser failed - see serial");
         return;
     }
@@ -410,12 +488,49 @@ void app_main(void)
         }
         /* The card can come and go whether we are awake or asleep. */
         bool card_changed = sdcard_poll();
-        if (bev == BUTTON_SHORT || bev == BUTTON_LONG) {
+        char cmd = devcmd_take();
+        if (bev == BUTTON_LONG || cmd == 'm') {
+            if (s_maint) {
+                leave_maint();
+            } else {
+                enter_maint();
+            }
+        } else if ((bev == BUTTON_SHORT || cmd == 's') && !s_maint) {
             if (s_asleep) {
                 leave_sleep();
             } else {
                 enter_sleep("button");
             }
+        } else if (cmd == 'r' && sdcard_present()) {
+            card_arrived(false);
+        } else if (cmd == 'd') {
+            static bool all_debug;
+            all_debug = !all_debug;
+            esp_log_level_set("*", all_debug ? ESP_LOG_DEBUG : ESP_LOG_INFO);
+            ESP_LOGI(TAG, "log level for every tag: %s", all_debug ? "DEBUG" : "INFO (own tags stay DEBUG)");
+            if (!all_debug) {
+                for (size_t i = 0; i < sizeof(own_tags) / sizeof(own_tags[0]); i++) {
+                    esp_log_level_set(own_tags[i], ESP_LOG_DEBUG);
+                }
+            }
+        } else if (cmd == 'i') {
+            char now[32];
+            ESP_LOGI(TAG, "info: %s heard=%" PRIu32 " words=%u card=%d files=%d log=%ld B maint=%d asleep=%d internal=%u",
+                     timesync_now_str(now, sizeof(now)), s_heard, (unsigned)s_book.count, sdcard_present(), s_files_ok,
+                     sdlog_size(), s_maint, s_asleep, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        }
+        if (s_maint) {
+            xQueueReset(s_events);
+            xSemaphoreTake(s_tap, 0);
+            if (maint_take_reboot()) {
+                vTaskDelay(pdMS_TO_TICKS(300));
+                esp_restart();
+            }
+            if (maint_idle_s() >= CONFIG_WORDBOOK_MAINT_IDLE_MIN * 60) {
+                ESP_LOGI(TAG, "maintenance idle for %d min; leaving", CONFIG_WORDBOOK_MAINT_IDLE_MIN);
+                leave_maint();
+            }
+            continue;
         }
         if (card_changed) {
             if (sdcard_present()) {

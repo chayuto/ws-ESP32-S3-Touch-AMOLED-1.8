@@ -10,7 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "bsp/display.h"
 #include "bsp/esp-bsp.h"
+#include "bsp/touch.h"
+#include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "photo.h"
@@ -36,6 +39,47 @@ static lv_image_dsc_t s_dsc[2];
 static int s_next;
 
 static cards_tap_cb_t s_on_tap;
+
+#define DRAW_LINES 20 /* 368 x 20 x 2 = 14,720 B, internal DMA */
+
+lv_display_t *cards_display_start(void)
+{
+    const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    if (lvgl_port_init(&port_cfg) != ESP_OK) {
+        return NULL;
+    }
+    esp_lcd_panel_handle_t panel = NULL;
+    esp_lcd_panel_io_handle_t io = NULL;
+    bsp_display_config_t dcfg = {0};
+    if (bsp_display_new(&dcfg, &panel, &io) != ESP_OK) {
+        return NULL;
+    }
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = io,
+        .panel_handle = panel,
+        .buffer_size = CARD_W * DRAW_LINES,
+        .double_buffer = false,
+        .hres = CARD_W,
+        .vres = CARD_H,
+        .monochrome = false,
+        .color_format = LV_COLOR_FORMAT_RGB565,
+        .rotation = {.swap_xy = false, .mirror_x = false, .mirror_y = false},
+        .flags = {.buff_dma = true, .buff_spiram = false, .sw_rotate = false, .swap_bytes = true},
+    };
+    lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
+    if (disp == NULL) {
+        return NULL;
+    }
+    esp_lcd_touch_handle_t tp = NULL;
+    if (bsp_touch_new(NULL, &tp) == ESP_OK && tp) {
+        const lvgl_port_touch_cfg_t tcfg = {.disp = disp, .handle = tp};
+        lvgl_port_add_touch(&tcfg);
+    } else {
+        ESP_LOGW(TAG, "no touch controller");
+    }
+    bsp_display_brightness_init();
+    return disp;
+}
 
 static void screen_pressed_cb(lv_event_t *e)
 {
@@ -165,6 +209,20 @@ bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
     place_word(photo);
     bsp_display_unlock();
     return photo;
+}
+
+void cards_show_info(const char *title, const char *detail)
+{
+    if (!bsp_display_lock(300)) {
+        return;
+    }
+    lv_obj_add_flag(s_photo, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x0f3d5c), 0);
+    lv_label_set_text(s_word, title);
+    lv_label_set_text(s_word_shadow, title);
+    lv_label_set_text(s_sub, detail);
+    place_word(false);
+    bsp_display_unlock();
 }
 
 void cards_show_buffer(const uint8_t *rgb565, const char *caption)

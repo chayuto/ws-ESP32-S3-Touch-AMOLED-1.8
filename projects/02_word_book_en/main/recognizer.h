@@ -59,3 +59,9 @@ void recognizer_resume(void);
  * returns before the new words are active.
  */
 void recognizer_set_words(const word_def_t *words, size_t count);
+
+/* Tear everything down: tasks, MultiNet, the AFE, the model list. Frees ~35 KB internal. */
+void recognizer_stop(void);
+
+/* The engine's last 5-second ambient summary, for metrics. */
+void recognizer_mic_level(float *avg_dbfs, float *peak_dbfs, int *speech_pct);

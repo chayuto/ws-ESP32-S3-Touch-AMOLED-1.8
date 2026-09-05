@@ -89,6 +89,23 @@ menu "Word book"
         range 3 60
         default 15
 
+    config WORDBOOK_LOG_MAX_KB
+        int "Log file cap (KB) before rotation to .1"
+        range 64 65536
+        default 4096
+
+    config WORDBOOK_PROBE_HOST
+        string "Host the board pings when maintenance mode starts (diagnostic)"
+        default ""
+        help
+            Set to the laptop's address to see from the board's side whether the
+            two can reach each other. Empty disables it. The gateway is always pinged.
+
+    config WORDBOOK_MAINT_IDLE_MIN
+        int "Minutes without a request before maintenance mode ends"
+        range 1 120
+        default 10
+
     config WORDBOOK_DIM_AFTER_S
         int "Seconds of quiet before dimming"
         range 5 3600
