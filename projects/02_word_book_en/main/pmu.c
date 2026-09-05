@@ -8,8 +8,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
-#include "sdlog.h"
-#include "timesync.h"
 
 static const char *TAG = "pmu";
 
@@ -150,26 +148,24 @@ esp_err_t pmu_init(void)
     return ESP_OK;
 }
 
-static const char *const chg_names[] = {"tri", "pre", "cc", "cv", "done", "idle", "?", "?"};
+static pmu_record_cb_t s_record_cb;
 
-void pmu_record(const char *event)
+void pmu_set_record_cb(pmu_record_cb_t cb)
 {
-    pmu_status_t st;
-    if (pmu_read(&st) != ESP_OK) {
-        return;
+    s_record_cb = cb;
+}
+
+void pmu_rail_bits(uint8_t *dcdc_en, uint8_t *ldo_en0, uint8_t *ldo_en1)
+{
+    uint8_t a = 0, b = 0, c = 0;
+    if (s_ready) {
+        rd(REG_DCDC_ENABLE, &a);
+        rd(REG_LDO_ENABLE0, &b);
+        rd(REG_LDO_ENABLE1, &c);
     }
-    uint8_t dc = 0, ldo0 = 0, ldo1 = 0;
-    rd(REG_DCDC_ENABLE, &dc);
-    rd(REG_LDO_ENABLE0, &ldo0);
-    rd(REG_LDO_ENABLE1, &ldo1);
-    char now[32], buf[320];
-    snprintf(buf, sizeof(buf),
-             "{\"t\":\"power\",\"time\":\"%s\",\"up_ms\":%lld,\"event\":\"%s\",\"usb\":%d,\"vbus_mv\":%u,"
-             "\"battery\":%d,\"vbat_mv\":%u,\"pct\":%u,\"vsys_mv\":%u,\"charging\":%d,\"chg\":\"%s\","
-             "\"dcdc_en\":\"%02x\",\"ldo_en\":\"%02x%02x\"}",
-             timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000), event, st.vbus_in, st.vbus_mv,
-             st.batt_present, st.vbat_mv, st.batt_pct, st.vsys_mv, st.charging, chg_names[st.chg_state & 7], dc, ldo0, ldo1);
-    sdlog_aux_write(1, buf);
+    if (dcdc_en) *dcdc_en = a;
+    if (ldo_en0) *ldo_en0 = b;
+    if (ldo_en1) *ldo_en1 = c;
 }
 
 bool pmu_poll(void)
@@ -189,10 +185,10 @@ bool pmu_poll(void)
         ESP_LOGW(TAG, "VBUS %s: battery %u mV (%u%%), vsys %u mV, %s", st.vbus_in ? "connected" : "REMOVED", st.vbat_mv,
                  st.batt_pct, st.vsys_mv, st.charging ? "charging" : "not charging");
         pmu_dump_rails(st.vbus_in ? "usb in" : "on battery");
-        pmu_record(st.vbus_in ? "usb_in" : "usb_out");
+        if (s_record_cb) s_record_cb(st.vbus_in ? "usb_in" : "usb_out");
         last_record_us = esp_timer_get_time();
     } else if (esp_timer_get_time() - last_record_us >= (int64_t)CONFIG_WORDBOOK_POWER_LOG_S * 1000000) {
-        pmu_record("periodic");
+        if (s_record_cb) s_record_cb("periodic");
         last_record_us = esp_timer_get_time();
     }
     return changed;

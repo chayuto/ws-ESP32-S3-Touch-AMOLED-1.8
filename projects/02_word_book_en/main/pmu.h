@@ -35,5 +35,13 @@ void pmu_dump_rails(const char *why);
  */
 bool pmu_poll(void);
 
-/* One power record now, tagged with `event`. */
-void pmu_record(const char *event);
+/*
+ * The app composes the periodic state record (it knows the screen, the heap, the
+ * recogniser). pmu_poll() calls this every CONFIG_WORDBOOK_POWER_LOG_S seconds and
+ * on every VBUS change, with `event` = "periodic" | "usb_in" | "usb_out".
+ */
+typedef void (*pmu_record_cb_t)(const char *event);
+void pmu_set_record_cb(pmu_record_cb_t cb);
+
+/* Rail enable registers, for the record. */
+void pmu_rail_bits(uint8_t *dcdc_en, uint8_t *ldo_en0, uint8_t *ldo_en1);

@@ -24,6 +24,7 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "maint.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -51,7 +52,7 @@ static const char *TAG = "wordbook";
 #define BOOK_DIR BSP_SD_MOUNT_POINT "/book"
 #define LOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.log"
 #define CLOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.classifier.jsonl"
-#define PLOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.power.jsonl"
+#define SLOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.state.jsonl"
 
 /* Self-test clips: macOS `say` at 16 kHz mono, padded with silence, raw PCM. */
 extern const uint8_t clip_dog_start[] asm("_binary_dog_pcm_start");
@@ -81,6 +82,9 @@ static const clip_t s_clips[] = {
  * after that, which is seconds away at the very least.
  */
 static audio_io_t s_io;
+static const char *s_last_word_text;
+static float s_last_prob;
+static bool s_dimmed;
 static book_t s_books[2];
 static word_def_t s_defs[2][BOOK_MAX_WORDS];
 static int s_active;
@@ -92,7 +96,6 @@ static QueueHandle_t s_events;
 static uint32_t s_heard;
 static int s_last_word = -1;
 static TickType_t s_last_activity;
-static bool s_dimmed;
 static SemaphoreHandle_t s_tap;
 
 /* --- Screen brightness: bright while in use, dim after a quiet spell -------- */
@@ -126,11 +129,46 @@ static void on_tap(void)
     xSemaphoreGive(s_tap);
 }
 
-/* --- Maintenance: Wi-Fi + HTTP API, recogniser stopped. Long press or 'm' toggles. --- */
+/* --- The state record: everything the board knows about itself, one JSON line. --- */
 
 static bool s_maint;
-static const char *s_last_word_text;
-static float s_last_prob;
+static bool s_asleep;
+
+static void state_record(const char *event)
+{
+    pmu_status_t ps = {0};
+    pmu_read(&ps);
+    uint8_t dc = 0, l0 = 0, l1 = 0;
+    pmu_rail_bits(&dc, &l0, &l1);
+    float mic_avg = 0, mic_peak = 0;
+    int speech = 0;
+    recognizer_mic_level(&mic_avg, &mic_peak, &speech);
+    static const char *const chg_names[] = {"tri", "pre", "cc", "cv", "done", "idle", "?", "?"};
+    char now[32], buf[640];
+    snprintf(buf, sizeof(buf),
+             "{\"t\":\"state\",\"time\":\"%s\",\"up_s\":%lld,\"event\":\"%s\","
+             "\"usb\":%d,\"vbus_mv\":%u,\"battery\":%d,\"vbat_mv\":%u,\"pct\":%u,\"vsys_mv\":%u,\"charging\":%d,\"chg\":\"%s\","
+             "\"dcdc_en\":\"%02x\",\"ldo_en\":\"%02x%02x\","
+             "\"screen\":\"%s\",\"brightness\":%d,\"asleep\":%d,\"maint\":%d,"
+             "\"internal\":%u,\"internal_min\":%u,\"psram\":%u,"
+             "\"card\":%d,\"files\":%d,\"log\":%d,\"log_bytes\":%ld,"
+             "\"words\":%u,\"heard\":%lu,\"last\":\"%s\",\"last_p\":%.2f,"
+             "\"mic_avg\":%.1f,\"mic_peak\":%.1f,\"speech_pct\":%d}",
+             timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000000), event,
+             ps.vbus_in, ps.vbus_mv, ps.batt_present, ps.vbat_mv, ps.batt_pct, ps.vsys_mv, ps.charging, chg_names[ps.chg_state & 7],
+             dc, l0, l1,
+             s_asleep ? "off" : s_dimmed ? "dim" : "on",
+             s_asleep ? 0 : s_dimmed ? CONFIG_WORDBOOK_DIM_BRIGHTNESS : CONFIG_WORDBOOK_BRIGHTNESS, s_asleep, s_maint,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             sdcard_present(), s_files_ok, sdlog_active(), sdlog_size(),
+             (unsigned)s_book.count, (unsigned long)s_heard, s_last_word_text ? s_last_word_text : "", s_last_prob,
+             mic_avg, mic_peak, speech);
+    sdlog_aux_write(1, buf);
+}
+
+/* --- Maintenance: Wi-Fi + HTTP API, recogniser stopped. Long press or 'm' toggles. --- */
+
 static void leave_sleep(void);
 static void restart_recognizer(void);
 
@@ -164,6 +202,7 @@ static void enter_maint(void)
     snprintf(line, sizeof(line), "http://%s", maint_ip());
     cards_show_info("setup", line);
     cards_status("hold BOOT to finish");
+    state_record("maint_in");
 }
 
 static void leave_maint(void)
@@ -180,11 +219,10 @@ static void leave_maint(void)
     wake_screen();
     cards_show_idle();
     cards_status("listening");
+    state_record("maint_out");
 }
 
 /* --- Sleep: screen off, ears off. BOOT toggles it; quiet for long enough enters it. --- */
-
-static bool s_asleep;
 
 static void enter_sleep(const char *why)
 {
@@ -195,6 +233,7 @@ static void enter_sleep(const char *why)
     recognizer_pause();
     bsp_display_brightness_set(0);
     ESP_LOGI(TAG, "sleep (%s): screen off, not listening; press BOOT to wake", why);
+    state_record("sleep");
 }
 
 static void leave_sleep(void)
@@ -207,6 +246,7 @@ static void leave_sleep(void)
     wake_screen();
     recognizer_resume();
     ESP_LOGI(TAG, "awake: listening");
+    state_record("wake");
 }
 
 
@@ -271,8 +311,8 @@ static void card_arrived(bool at_boot)
 {
     sdlog_open(LOG_PATH);
     sdlog_aux_open(0, CLOG_PATH);
-    sdlog_aux_open(1, PLOG_PATH);
-    pmu_record(at_boot ? "boot" : "card_in");
+    sdlog_aux_open(1, SLOG_PATH);
+    state_record(at_boot ? "boot" : "card_in");
     int slot = at_boot ? s_active : s_active ^ 1;
     book_t *nb = &s_books[slot];
     book_load(nb, BOOK_DIR);
@@ -459,6 +499,7 @@ void app_main(void)
     if (pmu_init() != ESP_OK) {
         ESP_LOGE(TAG, "AXP2101 not answering; rails left as found");
     }
+    pmu_set_record_cb(state_record);
 
     /* Clock first, so the log file header and FAT timestamps carry real time. */
     cards_status("setting the clock");

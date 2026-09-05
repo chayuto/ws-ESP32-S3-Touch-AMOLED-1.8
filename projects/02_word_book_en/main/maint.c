@@ -166,8 +166,8 @@ static esp_err_t h_metrics(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "log_bytes", (double)sdlog_size());
     cJSON_AddBoolToObject(o, "classifier_active", sdlog_aux_active(0));
     cJSON_AddNumberToObject(o, "classifier_bytes", (double)sdlog_aux_size(0));
-    cJSON_AddBoolToObject(o, "power_active", sdlog_aux_active(1));
-    cJSON_AddNumberToObject(o, "power_bytes", (double)sdlog_aux_size(1));
+    cJSON_AddBoolToObject(o, "state_active", sdlog_aux_active(1));
+    cJSON_AddNumberToObject(o, "state_bytes", (double)sdlog_aux_size(1));
     cJSON_AddNumberToObject(o, "words", st.words);
     cJSON_AddNumberToObject(o, "heard", st.heard);
     cJSON_AddStringToObject(o, "last_word", st.last_word ? st.last_word : "");
@@ -383,9 +383,9 @@ static esp_err_t h_clog_get(httpd_req_t *req)
     return send_aux(req, 0, "02_word_book_en.classifier.jsonl");
 }
 
-static esp_err_t h_power_get(httpd_req_t *req)
+static esp_err_t h_state_get(httpd_req_t *req)
 {
-    return send_aux(req, 1, "02_word_book_en.power.jsonl");
+    return send_aux(req, 1, "02_word_book_en.state.jsonl");
 }
 
 static esp_err_t send_aux(httpd_req_t *req, int ch, const char *dl_name)
@@ -454,11 +454,11 @@ static esp_err_t h_clog_delete(httpd_req_t *req)
                                             : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no classifier log");
 }
 
-static esp_err_t h_power_delete(httpd_req_t *req)
+static esp_err_t h_state_delete(httpd_req_t *req)
 {
     touch();
     return sdlog_aux_truncate(1) == ESP_OK ? httpd_resp_sendstr(req, "ok")
-                                            : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no power log");
+                                            : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no state log");
 }
 
 static esp_err_t h_log_delete(httpd_req_t *req)
@@ -521,8 +521,8 @@ esp_err_t maint_start(maint_state_cb_t cb)
         {.uri = "/api/log", .method = HTTP_DELETE, .handler = h_log_delete},
         {.uri = "/api/classifier", .method = HTTP_GET, .handler = h_clog_get},
         {.uri = "/api/classifier", .method = HTTP_DELETE, .handler = h_clog_delete},
-        {.uri = "/api/power", .method = HTTP_GET, .handler = h_power_get},
-        {.uri = "/api/power", .method = HTTP_DELETE, .handler = h_power_delete},
+        {.uri = "/api/state", .method = HTTP_GET, .handler = h_state_get},
+        {.uri = "/api/state", .method = HTTP_DELETE, .handler = h_state_delete},
         {.uri = "/api/reload", .method = HTTP_POST, .handler = h_reload},
         {.uri = "/api/reboot", .method = HTTP_POST, .handler = h_reboot},
     };

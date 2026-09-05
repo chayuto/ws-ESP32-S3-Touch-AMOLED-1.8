@@ -222,26 +222,32 @@ Written opportunistically like the log: only while a card is present, rotates at
 jq -c 'select(.t=="det") | [.time, .verdict, .cands[0].w, .cands[0].p]' 02_word_book_en.classifier.jsonl
 ```
 
-### Power records
+### State records
 
-`/sdcard/02_word_book_en.power.jsonl` — one record every `CONFIG_WORDBOOK_POWER_LOG_S`
-(30) seconds and one on every plug or unplug: USB present and its voltage, battery
-present / mV / %, system mV, charging flag and charge phase, and the rail-enable
-registers. From the page: last 100, download, clear; API `GET /api/power[?tail=N]`,
-`DELETE /api/power`. The text log gets a full rail dump on every VBUS change too.
+`/sdcard/02_word_book_en.state.jsonl` — one record every `CONFIG_WORDBOOK_POWER_LOG_S`
+(30) seconds and one on every plug, unplug, sleep, wake and maintenance in/out:
+everything the board knows about itself on one line — USB and its voltage, battery
+present / mV / % / charge phase, system voltage, rail-enable registers, screen state and
+brightness, sleep and maintenance flags, heap current and minimum, PSRAM, card / files /
+log, word count, heard count with the last word and its confidence, mic level and speech
+percentage, uptime and real time. From the page: last 100, download, clear; API
+`GET /api/state[?tail=N]`, `DELETE /api/state`.
 
 ```
-{"t":"power","time":"…","up_ms":…,"event":"usb_out","usb":0,"vbus_mv":0,"battery":1,"vbat_mv":4110,"pct":100,"vsys_mv":4100,"charging":0,"chg":"idle","dcdc_en":"0f","ldo_en":"ff01"}
+{"t":"state","time":"2026-09-06 09:40:06","up_s":6,"event":"boot","usb":1,"vbus_mv":5222,"battery":1,"vbat_mv":4114,"pct":100,"vsys_mv":4361,"charging":0,"chg":"done","dcdc_en":"0f","ldo_en":"ff01","screen":"on","brightness":85,"asleep":0,"maint":0,"internal":56603,"internal_min":19075,"psram":4137488,"card":1,"files":1,"log":1,"log_bytes":348323,"words":19,"heard":0,"last":"","last_p":0.00,"mic_avg":-63.6,"mic_peak":-52.0,"speech_pct":0}
 ```
 
-Background: the screen was found dark twice while the board ran on its battery. This is
-the instrument for that.
+Background: the screen was reported dark several times. Every case in the card log was
+a sleep (BOOT on a lit screen), a dim (12 % / 35 % on a near-black card) or a second press
+right after waking — never a rail. The record makes that readable in one line per event.
 
 ### Buttons
 
-A short BOOT press on a **dark or dimmed** screen wakes it — never sleeps it. Sleep is a
-short press on a fully lit screen, or the quiet timer. A long press is maintenance mode.
-(Earlier a press on a dimmed board put it to sleep, which looked like a dead screen.)
+A short BOOT press on a **dark or dimmed** screen wakes it — never sleeps it — and a press
+within three seconds of waking only brightens. Sleep is a short press on a fully lit
+screen that has been lit for a while, or the quiet timer. A long press is maintenance
+mode. The idle card is a plain blue with the words on it so a dimmed (50 %) board still
+looks on. Serial: `p` rails and power, `b` full brightness, `x` panel re-init.
 
 ### Numbers
 
@@ -440,7 +446,7 @@ main/wifi_sta.[ch]     join / leave the home network (NTP and maintenance share 
 main/maint.[ch]+.html  maintenance mode: HTTP API + page
 main/devcmd.[ch]       single-letter serial commands
 main/clog.[ch]         classifier + environment records (JSON Lines) → sdlog aux channel 0
-main/pmu.[ch]          AXP2101: rails, battery, USB; power records → sdlog aux channel 1
+main/pmu.[ch]          AXP2101: rails, battery, USB; triggers the state record (sdlog aux channel 1)
 main/button.[ch]       BOOT button (GPIO 0), polled: press = sleep / wake
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)
