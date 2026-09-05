@@ -20,7 +20,9 @@
 #include "bsp/esp-bsp.h"
 #include "cards.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -29,11 +31,13 @@
 #include "player.h"
 #include "recognizer.h"
 #include "sdcard.h"
+#include "sdlog.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "wordbook";
 
 #define BOOK_DIR BSP_SD_MOUNT_POINT "/book"
+#define LOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.log"
 
 /* Self-test clips: macOS `say` at 16 kHz mono, padded with silence, raw PCM. */
 extern const uint8_t clip_dog_start[] asm("_binary_dog_pcm_start");
@@ -168,19 +172,23 @@ static void build_defs(int slot)
     }
 }
 
-/* The card appeared (at boot, or later): take its book. */
+/* The card appeared (at boot, or later): start the log file, take its book. */
 static void card_arrived(bool at_boot)
 {
+    sdlog_open(LOG_PATH);
     int slot = at_boot ? s_active : s_active ^ 1;
     book_t *nb = &s_books[slot];
     book_load(nb, BOOK_DIR);
     if (!nb->from_sd) {
-        ESP_LOGW(TAG, "card present but no usable %s/words.json; keeping current words", BOOK_DIR);
+        /* At boot the fallback list has just been loaded into the active slot; the caller
+         * builds its word table. Later on, the current words simply stay. */
+        ESP_LOGW(TAG, "card present but no usable %s/words.json; %s", BOOK_DIR,
+                 at_boot ? "using built-in words" : "keeping current words");
         s_files_ok = false;
         return;
     }
     if (at_boot) {
-        build_defs(slot);
+        /* caller builds the table */
     } else if (book_same_words(nb, &s_book)) {
         book_adopt_files(&s_book, nb);
         ESP_LOGI(TAG, "same %u words as before; photos and prompts now available", (unsigned)s_book.count);
@@ -195,6 +203,7 @@ static void card_arrived(bool at_boot)
 
 static void card_left(void)
 {
+    sdlog_close();
     s_files_ok = false;
     ESP_LOGW(TAG, "card lost; keeping %u words, text cards until it returns", (unsigned)s_book.count);
     cards_status("card removed - text cards");
@@ -251,9 +260,39 @@ static void self_test(void)
     cards_status(line);
 }
 
+/*
+ * Crash-loop guard. A firmware bug that panics at boot reboots the chip every
+ * few seconds; on this board that has taken the USB console down with it and
+ * cost a manual power cycle. After three consecutive panics, stop before the
+ * SD card and the recogniser, show why on screen, and just keep the console
+ * alive so the next flash can go in.
+ */
+static RTC_NOINIT_ATTR uint32_t s_panic_streak;
+static RTC_NOINIT_ATTR uint32_t s_panic_magic;
+#define PANIC_MAGIC 0x50414e43u /* "PANC" */
+#define PANIC_LIMIT 3
+
+static bool crash_loop_guard(void)
+{
+    esp_reset_reason_t why = esp_reset_reason();
+    if (s_panic_magic != PANIC_MAGIC) {
+        s_panic_magic = PANIC_MAGIC;
+        s_panic_streak = 0;
+    }
+    if (why == ESP_RST_PANIC || why == ESP_RST_TASK_WDT || why == ESP_RST_INT_WDT || why == ESP_RST_WDT) {
+        s_panic_streak++;
+        ESP_LOGW(TAG, "reset reason %d, consecutive crash %" PRIu32 "/%d", (int)why, s_panic_streak, PANIC_LIMIT);
+    } else {
+        s_panic_streak = 0;
+    }
+    return s_panic_streak >= PANIC_LIMIT;
+}
+
 void app_main(void)
 {
+    sdlog_init(); /* first, so every line below is in the ring before a card is even mounted */
     ESP_LOGI(TAG, "02_word_book_en starting");
+    bool safe_mode = crash_loop_guard();
     s_events = xQueueCreate(8, sizeof(word_event_t));
     s_tap = xSemaphoreCreateBinary();
 
@@ -272,14 +311,23 @@ void app_main(void)
     cards_show_idle();
     cards_status("starting");
 
+    if (safe_mode) {
+        ESP_LOGE(TAG, "SAFE MODE: %d crashes in a row. Not touching SD or the recogniser. Flash a fix.", PANIC_LIMIT);
+        cards_status("safe mode: crashed 3x - flash a fix");
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            ESP_LOGE(TAG, "safe mode, waiting for a flash (streak %" PRIu32 ")", s_panic_streak);
+        }
+    }
+
     /* Content: the card's book if there is one, built-in vocabulary if not. */
     if (sdcard_init()) {
         card_arrived(true);
     }
     if (!s_book.count) {
         book_load(&s_book, "/nonexistent"); /* falls straight through to the built-in list */
-        build_defs(s_active);
     }
+    build_defs(s_active); /* whichever book ended up active, the recogniser needs its table */
 
     audio_io_t io = {0};
     if (audio_io_init(&io) != ESP_OK) {
@@ -296,6 +344,8 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(1500));
     self_test();
 #endif
+
+    s_panic_streak = 0; /* made it through start-up: a later crash starts a new count */
 
     char status[48];
     snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_files_ok ? " from SD" : ", built-in");

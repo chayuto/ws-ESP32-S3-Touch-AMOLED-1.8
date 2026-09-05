@@ -254,8 +254,11 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
   does not reset. `capture.py` only for the boot banner, and only once.
 - **Unplugging USB is not a power cycle.** The AXP2101 keeps the system up (consistent
   with a battery on the MX1.25 header; USB session ID was unchanged after a cable pull).
-  **Recovery from a wedge: hold PWR 8–10 s, release, press once.** That costs the person
-  at the desk a manual step every time — which is why the rule above exists.
+  **Recovery from a wedge: hold PWR 8–10 s, release, press once.** If the flashed image
+  is crash-looping, power up **into download mode** instead — hold BOOT while pressing
+  PWR, keep BOOT ~2 s — so nothing runs and esptool can connect. Every such recovery is
+  a manual step for the person at the desk, which is why the rule above exists, and why
+  `02_word_book_en` drops into a safe mode after three consecutive crashes.
 - **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
   backup before any flash that you cannot otherwise undo.
 

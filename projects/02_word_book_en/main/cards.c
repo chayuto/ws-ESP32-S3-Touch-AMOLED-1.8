@@ -86,6 +86,14 @@ void cards_init(cards_tap_cb_t on_tap)
     lv_obj_set_style_text_font(s_word, &lv_font_montserrat_72, 0);
     lv_obj_set_style_text_color(s_word, lv_color_white(), 0);
 
+    /* 72 px is wide: "say a word" alone overruns 368 px. Fixed width, wrap, centre. */
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *l = i ? s_word : s_word_shadow;
+        lv_obj_set_width(l, CARD_W - 24);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    }
+
     s_sub = lv_label_create(scr);
     lv_obj_set_style_text_font(s_sub, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_sub, lv_color_hex(0xdddddd), 0);

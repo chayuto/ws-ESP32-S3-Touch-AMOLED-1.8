@@ -17,6 +17,6 @@ BUILD=/tmp/ws-amoled-build/$NAME
 PY=~/.espressif/python_env/idf5.5_py3.14_env/bin/python
 [ -f "$BUILD/flash_args" ] || { echo "no $BUILD/flash_args - build first" >&2; exit 2; }
 cd "$BUILD"
-$PY -m esptool --chip esp32s3 --port "$PORT" --baud 921600 \
+$PY -m esptool --chip esp32s3 --port "$PORT" --baud 921600 --connect-attempts 30 \
   --before default_reset --after watchdog_reset write_flash @flash_args
 echo "flashed $NAME; chip is rebooting via watchdog. Wait >=3 s, then attach.sh - do not reset it." >&2

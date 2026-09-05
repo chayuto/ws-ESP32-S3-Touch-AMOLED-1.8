@@ -131,6 +131,9 @@ static void detect_task(void *arg)
     }
 
     uint32_t frames = 0;
+    /* Ambient level report every ~5 s: what the recogniser is actually hearing. */
+    float lvl_sum = 0, lvl_max = -120;
+    uint32_t lvl_n = 0, lvl_speech = 0;
     for (;;) {
         afe_fetch_result_t *res = s_afe->fetch(s_afe_data);
         if (res == NULL || res->ret_value == ESP_FAIL) {
@@ -138,6 +141,19 @@ static void detect_task(void *arg)
             continue;
         }
         frames++;
+        if (!s_paused) {
+            lvl_sum += res->data_volume;
+            if (res->data_volume > lvl_max) {
+                lvl_max = res->data_volume;
+            }
+            lvl_n++;
+            lvl_speech += (res->vad_state == VAD_SPEECH);
+            if (lvl_n >= 156) { /* 156 x 32 ms = 5 s */
+                ESP_LOGI(TAG, "mic: avg %.1f dBFS, peak %.1f dBFS, vad speech %lu%% of last 5 s", lvl_sum / lvl_n, lvl_max,
+                         (unsigned long)(lvl_speech * 100 / lvl_n));
+                lvl_sum = 0; lvl_max = -120; lvl_n = 0; lvl_speech = 0;
+            }
+        }
         if (s_flush) {
             /* Resume after playback: forget whatever the model had half-heard. Done here,
              * on the task that owns the model, never from another core. */

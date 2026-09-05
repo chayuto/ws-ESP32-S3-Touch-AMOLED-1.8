@@ -46,6 +46,15 @@ flash. If you genuinely need the banner (bootloader, partition table, PSRAM init
 - `idf.py flash monitor` — no TTY here anyway.
 - Two `capture.py` runs back to back.
 
+## If the image crash-loops
+
+A boot-time panic reboots the chip every few seconds, and on this board repeated
+resets take the USB link down too — a plain power cycle then wedges again before you
+can flash. Get the person at the desk to **power up into download mode**, where no app
+runs: hold PWR ~8 s (off) → **hold BOOT, press PWR once, keep BOOT held ~2 s, release**.
+The ROM sits waiting; `flash.sh` connects first try. The app itself now has a safe mode
+after three consecutive crashes so this should not recur, but the recipe stays.
+
 ## If it wedges anyway
 
 Tell the user: hold PWR 8–10 s, release, press once. Record it in CLAUDE.md with what

@@ -104,6 +104,28 @@ Verified without a card: the poll loop runs for a minute with the heap flat and
 recognition unaffected. **Not verified** (needs a card): hot insert, live vocabulary swap,
 removal mid-use.
 
+### The card is also the flight recorder
+
+With a card mounted, **every `ESP_LOG` line is appended to `/sdcard/02_word_book_en.log`**
+— boot, card events, every detection with its confidence and VAD state, every rejection,
+the 5-second `mic:` ambient-level line, heartbeats. Lines are captured into a 64 KB PSRAM
+ring from the first line of boot (before the card is even mounted), a low-priority task
+drains the ring to the file, and the file is synced every 2 s, so a pulled card or lost
+power costs at most the last two seconds. Each boot starts with a
+`===== boot: ... reset reason N =====` header so sessions can be split. Console output is
+unchanged. Card gone → file closed, ring keeps capturing; card back → reopened, still
+appending.
+
+Read it on a laptop; `grep "mic:"` for the noise floor over a day, `grep heard` for what
+the child said, `grep rejected` for what nearly fired.
+
+### Safe mode
+
+Three consecutive crash-resets (panic or watchdog, counted in RTC memory) and the app
+stops before touching the SD card or the recogniser, shows *safe mode* on screen, and
+keeps the console alive for the next flash. A boot-time bug can no longer become a reboot
+storm — which on this board has taken the USB link down and needed a manual power cycle.
+
 ### Verified output (2026-09-05, no card in the slot)
 
 ```
@@ -253,6 +275,9 @@ main/audio_io.[ch]     I2S + ES8311 at 16 kHz mono (from M0)
 main/recognizer.[ch]   ESP-SR AFE + MultiNet behind word_event_t — the module project 3 replaces
 main/book.[ch]         words.json → vocabulary; built-in fallback
 main/sdcard.[ch]       card presence: polled mount / status, no card-detect pin
+main/sdlog.[ch]        ESP_LOG mirror → /sdcard/02_word_book_en.log, append, 2 s sync
+main/button.[ch]       BOOT button (GPIO 0), polled: sleep / wake
+main/fonts/            lv_font_montserrat_72, generated with lv_font_conv
 main/cards.[ch]        full-screen photo / text cards (LVGL)
 main/player.[ch]       chime synth + WAV playback, pausing recognition meanwhile
 main/testclips/*.pcm   synthesised 16 kHz clips embedded for the boot self-test
