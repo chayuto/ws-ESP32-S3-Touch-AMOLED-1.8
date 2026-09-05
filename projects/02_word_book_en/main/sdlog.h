@@ -23,6 +23,19 @@ void sdlog_close(void);
 /* True while a log file is open on the card. */
 bool sdlog_active(void);
 
+/*
+ * Second channel: a machine-readable file beside the log (JSON Lines), written by
+ * sdlog_aux_write() from any task, drained and synced by the same task as the log.
+ * Opened and closed together with the main file.
+ */
+esp_err_t sdlog_aux_open(const char *path);
+void sdlog_aux_close(void);
+void sdlog_aux_write(const char *line); /* one record, no trailing newline needed */
+bool sdlog_aux_active(void);
+const char *sdlog_aux_path(void);
+long sdlog_aux_size(void);
+esp_err_t sdlog_aux_truncate(void);
+
 /* Current file's path and size in bytes (0 if none). */
 const char *sdlog_path(void);
 long sdlog_size(void);

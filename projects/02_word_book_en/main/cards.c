@@ -89,6 +89,19 @@ static void screen_pressed_cb(lv_event_t *e)
     }
 }
 
+/* Number words show the digit large with the word beneath. */
+static const char *number_digit(const char *word)
+{
+    static const char *const names[] = {"ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"};
+    static const char *const digits[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9"};
+    for (size_t i = 0; i < 9; i++) {
+        if (strcmp(word, names[i]) == 0) {
+            return digits[i];
+        }
+    }
+    return NULL;
+}
+
 static const uint32_t s_palette[] = {0xC2410C, 0x1D4ED8, 0xBE185D, 0x047857, 0x7C3AED, 0xB45309, 0x0E7490, 0x9F1239};
 
 void cards_init(cards_tap_cb_t on_tap)
@@ -203,9 +216,18 @@ bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
         }
         lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(s_palette[idx % (sizeof(s_palette) / sizeof(s_palette[0]))]), 0);
     }
-    lv_label_set_text(s_word, word->text);
-    lv_label_set_text(s_word_shadow, word->text);
-    lv_label_set_text(s_sub, sub);
+    const char *digit = photo ? NULL : number_digit(word->text);
+    if (digit) {
+        char both[48];
+        snprintf(both, sizeof(both), "%s  %s", word->text, sub);
+        lv_label_set_text(s_word, digit);
+        lv_label_set_text(s_word_shadow, digit);
+        lv_label_set_text(s_sub, both);
+    } else {
+        lv_label_set_text(s_word, word->text);
+        lv_label_set_text(s_word_shadow, word->text);
+        lv_label_set_text(s_sub, sub);
+    }
     place_word(photo);
     bsp_display_unlock();
     return photo;

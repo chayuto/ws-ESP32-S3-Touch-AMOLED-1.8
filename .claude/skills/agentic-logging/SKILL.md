@@ -63,7 +63,13 @@ per session. The hook must not put a buffer on the calling task's stack (a stati
 under esp_log's lock is right); it runs on every task that logs, including the 2 KB
 system event task.
 
-Copy `sdlog.[ch]` into a new project rather than reinventing it.
+`sdlog` has a second channel for **machine-readable records** (JSON Lines): `02_word_book_en`
+writes every classifier result with all candidates, a 5-second environment record and a
+session record to `<project>.classifier.jsonl`. Text log for reading, JSONL for analysis;
+both timestamped with wall time and uptime so they join.
+
+Copy `sdlog.[ch]` (and `clog.[ch]` as the pattern) into a new project rather than
+reinventing them.
 
 ## Clock
 

@@ -131,7 +131,7 @@ happens in each case:
 
 | Situation | Behaviour |
 |---|---|
-| No card at boot | Built-in 10 words (DOG CAT BALL DUCK BABY CAR SHOE BOOK BIRD APPLE), text cards, chime. Keeps checking. |
+| No card at boot | Built-in 19 words (DOG CAT BALL DUCK BABY CAR SHOE BOOK BIRD APPLE, ONE…NINE), text cards, chime. Keeps checking. |
 | Card inserted later | `words.json` loaded. Same words as now → photos and prompts become available. Different words → the recogniser's vocabulary is **swapped live**, no reboot; the swap is done by the detect task at a safe point. |
 | Card present but no `book/words.json` | Current words kept; text cards. |
 | Card removed while running | Current words **kept** (the child's words keep working), text cards and chime until it returns. A failed photo or prompt read triggers an immediate re-check rather than waiting for the next poll. |
@@ -200,6 +200,33 @@ appending.
 
 Read it on a laptop; `grep "mic:"` for the noise floor over a day, `grep heard` for what
 the child said, `grep rejected` for what nearly fired.
+
+### Classifier records — what the recogniser saw, for analysis
+
+Beside the log, `/sdcard/02_word_book_en.classifier.jsonl`: JSON Lines, one record per
+line, machine-readable. Three kinds:
+
+```
+{"t":"session","time":"…","up_ms":…,"fw":"…","min_pct":20,"sound_pct":35,"words":["DOG","CAT",…]}
+{"t":"det","time":"…","up_ms":24419,"frame":482,"vad":0,"vol_dbfs":-52.8,"verdict":"silence","cands":[{"id":5,"w":"CAR","p":0.135}]}
+{"t":"env","time":"…","up_ms":24514,"mic_avg":-50.2,"mic_peak":-14.3,"speech_pct":78,"internal":81851,"internal_min":30123,"psram":4448656,"card":1}
+```
+
+`det` is **every** MultiNet result, gated or not, with all its candidates — the raw
+material for setting the two thresholds on the child's voice. `env` every five seconds.
+Written opportunistically like the log: only while a card is present, rotates at
+`CONFIG_WORDBOOK_LOG_MAX_KB`. From the maintenance page: last 100, download, clear; API
+`GET /api/classifier[?tail=N]`, `DELETE /api/classifier`.
+
+```zsh
+jq -c 'select(.t=="det") | [.time, .verdict, .cands[0].w, .cands[0].p]' 02_word_book_en.classifier.jsonl
+```
+
+### Numbers
+
+ONE to NINE are words too (built in, and `assets/words.json` for the card). A number
+shows its digit large with the word beneath — text-only words in `words.json` need no
+photo.
 
 ### The clock
 
@@ -391,6 +418,7 @@ main/timesync.[ch]     NTP → RTC → build time, at boot
 main/wifi_sta.[ch]     join / leave the home network (NTP and maintenance share it)
 main/maint.[ch]+.html  maintenance mode: HTTP API + page
 main/devcmd.[ch]       single-letter serial commands
+main/clog.[ch]         classifier + environment records (JSON Lines) → sdlog's second channel
 main/button.[ch]       BOOT button (GPIO 0), polled: press = sleep / wake
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)

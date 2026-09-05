@@ -42,6 +42,7 @@ static const char *TAG = "wordbook";
 
 #define BOOK_DIR BSP_SD_MOUNT_POINT "/book"
 #define LOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.log"
+#define CLOG_PATH BSP_SD_MOUNT_POINT "/02_word_book_en.classifier.jsonl"
 
 /* Self-test clips: macOS `say` at 16 kHz mono, padded with silence, raw PCM. */
 extern const uint8_t clip_dog_start[] asm("_binary_dog_pcm_start");
@@ -256,6 +257,7 @@ static void build_defs(int slot)
 static void card_arrived(bool at_boot)
 {
     sdlog_open(LOG_PATH);
+    sdlog_aux_open(CLOG_PATH);
     int slot = at_boot ? s_active : s_active ^ 1;
     book_t *nb = &s_books[slot];
     book_load(nb, BOOK_DIR);
@@ -285,6 +287,7 @@ static void card_arrived(bool at_boot)
 
 static void card_left(void)
 {
+    sdlog_aux_close();
     sdlog_close();
     s_files_ok = false;
     ESP_LOGW(TAG, "card lost; keeping %u words, text cards until it returns", (unsigned)s_book.count);

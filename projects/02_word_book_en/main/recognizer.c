@@ -13,6 +13,7 @@
 #include "recognizer.h"
 
 #include "audio_io.h"
+#include "clog.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -37,6 +38,7 @@ static const char *TAG = "recog";
 #define FEED_PRIO       6   /* above detect so the ring buffer never starves */
 #define DETECT_PRIO     5
 #define MN_TIMEOUT_MS   5000
+#define BOOK_WORDS_FOR_CLOG 64
 
 /*
  * Two gates, and VAD is the one that matters. Digital silence reliably produced
@@ -164,6 +166,7 @@ static void detect_task(void *arg)
                 s_mic_peak = lvl_max;
                 s_mic_speech = (int)(lvl_speech * 100 / lvl_n);
                 ESP_LOGI(TAG, "mic: avg %.1f dBFS, peak %.1f dBFS, vad speech %d%% of last 5 s", s_mic_avg, s_mic_peak, s_mic_speech);
+                clog_env(s_mic_avg, s_mic_peak, s_mic_speech);
                 lvl_sum = 0; lvl_max = -120; lvl_n = 0; lvl_speech = 0;
             }
         }
@@ -201,6 +204,17 @@ static void detect_task(void *arg)
             }
             bool speech = (res->vad_state == VAD_SPEECH);
             bool valid = r->num > 0 && r->command_id[0] >= 0 && (size_t)r->command_id[0] < s_word_count;
+            const char *verdict = !valid ? "invalid" : !speech ? "silence" : r->prob[0] >= MIN_PROB ? "accepted" : "low";
+            clog_cand_t cands[ESP_MN_RESULT_MAX_NUM];
+            int nc = 0;
+            for (int i = 0; i < r->num && i < ESP_MN_RESULT_MAX_NUM; i++) {
+                int id = r->command_id[i];
+                cands[nc].id = id;
+                cands[nc].text = (id >= 0 && (size_t)id < s_word_count) ? s_words[id].text : NULL;
+                cands[nc].prob = r->prob[i];
+                nc++;
+            }
+            clog_detection(cands, nc, speech, res->data_volume, verdict, frames);
             if (valid && speech) {
                 s_raw.id = r->command_id[0];
                 s_raw.prob = r->prob[0];
@@ -250,6 +264,12 @@ static void apply_words(const word_def_t *words, size_t count)
     s_word_count = count;
     s_mn->print_active_speech_commands(s_mn_data);
     ESP_LOGI(TAG, "vocabulary: %u of %u words loaded", (unsigned)loaded, (unsigned)count);
+    const char *texts[BOOK_WORDS_FOR_CLOG];
+    size_t nt = count < BOOK_WORDS_FOR_CLOG ? count : BOOK_WORDS_FOR_CLOG;
+    for (size_t i = 0; i < nt; i++) {
+        texts[i] = words[i].text;
+    }
+    clog_session(texts, nt, CONFIG_WORDBOOK_MIN_PROB_PCT, CONFIG_WORDBOOK_SOUND_PROB_PCT);
 }
 
 static void start_tasks(void)
