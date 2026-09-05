@@ -140,6 +140,51 @@ Verified without a card: the poll loop runs for a minute with the heap flat and
 recognition unaffected. **Not verified** (needs a card): hot insert, live vocabulary swap,
 removal mid-use.
 
+### Maintenance mode — manage the card from a laptop, no reader
+
+**Hold BOOT ~2 s** (or send `m` on the serial console). The board stops listening, joins
+the home Wi-Fi as a client and serves one page at the address shown on its screen —
+`http://192.168.1.111/` on this network:
+
+- **drop photos** (`dog.jpg`) and prompts (`dog.wav`) onto the page; delete files; the
+  book reloads and the recogniser swaps vocabulary when you leave
+- **log:** last 200 lines, download the whole file, clear it
+- **device:** time, uptime, firmware, RAM (current and minimum), card, mic level,
+  thresholds; reload; reboot
+
+Hold BOOT again to leave, or it leaves by itself after `CONFIG_WORDBOOK_MAINT_IDLE_MIN`
+(10) minutes without a request. The recogniser resumes with whatever the card holds.
+
+The API behind the page, for scripts:
+
+| | |
+|---|---|
+| `GET /api/metrics` | JSON: time, uptime, heap, card, log size, words, last word, mic level, thresholds |
+| `GET /api/book` | files in `/book` with sizes |
+| `GET /api/book/<name>` | download a file |
+| `PUT /api/book/<name>` | upload (body = file; `word.jpg` / `word.wav`) |
+| `DELETE /api/book/<name>` | delete (also drops the `.rgb565` cache) |
+| `GET /api/log`, `?tail=N` | the flight recorder, whole or last N lines |
+| `DELETE /api/log` | truncate |
+| `POST /api/reload` | rescan the book on exit |
+| `POST /api/reboot` | reboot |
+
+Verified 2026-09-05 from a laptop on the same network: every route, a 164 KB upload in
+0.67 s that read back byte-identical, exit restarting the recogniser with the new word.
+Internal RAM in this mode: ~51 KB free, **19 KB minimum** — Wi-Fi, HTTP and the
+recogniser (kept resident: MultiNet7's `destroy()` double-frees) all at once, after
+shrinking the Wi-Fi/lwIP pools and the draw buffer. Wi-Fi power-save is off while
+joined; with it on, the board answered ARP and nothing else.
+
+A first version served an access point of its own instead; the phone side never
+connected and it was replaced by this the same day.
+
+### Serial commands
+
+Single letters on the USB console (`printf 'm' > /dev/cu.usbmodem3101` with the port
+opened `-hupcl`; see the `serial-capture` skill): `m` maintenance, `s` sleep, `r` reload
+the card, `i` status line, `d` DEBUG on every tag.
+
 ### The card is also the flight recorder
 
 With a card mounted, **every `ESP_LOG` line is appended to `/sdcard/02_word_book_en.log`**
@@ -342,6 +387,9 @@ main/sdlog.[ch]        ESP_LOG mirror → /sdcard/02_word_book_en.log, append, 2
 main/pcf85063.[ch]     the RTC: read, set, CLKOUT off
 main/timesync.[ch]     NTP → RTC → build time, at boot
 main/photo.[ch]        JPEG decode (esp_new_jpeg) + centre-crop/box-filter to 368×448 + card cache
+main/wifi_sta.[ch]     join / leave the home network (NTP and maintenance share it)
+main/maint.[ch]+.html  maintenance mode: HTTP API + page
+main/devcmd.[ch]       single-letter serial commands
 main/button.[ch]       BOOT button (GPIO 0), polled: press = sleep / wake
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)
