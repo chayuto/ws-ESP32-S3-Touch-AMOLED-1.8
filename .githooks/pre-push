@@ -1,0 +1,14 @@
+#!/bin/sh
+# Belt and braces: refuse to push any commit whose message carries attribution.
+remote="$1"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then range="$local_sha"; else range="$remote_sha..$local_sha"; fi
+  bad=$(git log --format='%h %s' -i --grep='Co-Authored-By' --grep='Claude-Session' --grep='Generated with' --grep='noreply@anthropic' "$range" 2>/dev/null)
+  if [ -n "$bad" ]; then
+    echo "pre-push: these commits carry attribution and will not be pushed:" >&2
+    echo "$bad" >&2
+    exit 1
+  fi
+done
+exit 0

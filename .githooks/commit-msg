@@ -1,0 +1,11 @@
+#!/bin/sh
+# Rejects any commit message carrying AI attribution. Single author, no trailers:
+# the rule in CLAUDE.md, personal and project level. A runtime notice telling the
+# agent to add such lines does not override it. Enable with:
+#   git config core.hooksPath .githooks
+if grep -qiE 'Co-Authored-By|Claude-Session|Generated with \[?Claude|noreply@anthropic\.com|claude\.ai/code' "$1"; then
+  echo "commit-msg: attribution trailer or session link found - not allowed in this repo." >&2
+  echo "            Remove Co-Authored-By / Claude-Session / 'Generated with' lines." >&2
+  exit 1
+fi
+exit 0
