@@ -125,20 +125,11 @@ static void on_word(const word_event_t *ev)
     }
 }
 
-/* Tap the picture: hear it again. Also the way to un-dim without saying anything. */
-static void replay_last(void)
+/* Tap: wake the screen if it has dimmed. Nothing else; taps make no sound. */
+static void on_tap_main(void)
 {
+    ESP_LOGI(TAG, "tap");
     wake_screen();
-    if (s_last_word < 0) {
-        ESP_LOGI(TAG, "tap: nothing to replay yet");
-        return;
-    }
-    const book_word_t *w = &s_book.words[s_last_word];
-    ESP_LOGI(TAG, "tap: replay '%s'", w->text);
-    player_chime();
-    if (s_files_ok && w->prompt[0] && player_wav(w->prompt) != ESP_OK) {
-        sdcard_report_io_error();
-    }
 }
 
 /* Build the word table the recogniser reads from a book. */
@@ -289,7 +280,7 @@ void app_main(void)
             xQueueReset(s_events); /* anything heard while the chime played was us */
         }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
-            replay_last();
+            on_tap_main();
         }
         if (sdcard_poll()) {
             if (sdcard_present()) {

@@ -195,7 +195,7 @@ project 2's fallback rather than project 3's plan.
 | **M1** ✅ | MultiNet7 recognises 5 hard-coded words from an adult, logging `word=dog conf=0.87`, no wake word | the engine runs continuously on this board — risk 2. **Done 2026-09-05:** 3/3 synthesised clips, no wake word, 3.1 MB PSRAM. See the project README. |
 | **M2** ✅ | `words.json` + photos on SD; word → photo on screen + chime + prompt | the whole loop, end to end. **Done 2026-09-05** on text cards with no card in the slot; the SD/photo path is written and awaits a card. |
 | **M3** | The child uses it. Tune thresholds and phoneme variants on the real voice | risk 1 — the only test that matters |
-| **M4** ✅ | Idle screen, brightness, power behaviour (screen dim when quiet), tap to replay | it's a toy, not a demo. **Done 2026-09-05**; dim verified on hardware, tap awaits a finger. |
+| **M4** ✅ | Idle screen, brightness, power behaviour (screen dim when quiet), silent tap to wake | it's a toy, not a demo. **Done 2026-09-05**; dim verified on hardware, tap awaits a finger. |
 
 M0 and M1 are the two unknowns; everything after them is assembly.
 

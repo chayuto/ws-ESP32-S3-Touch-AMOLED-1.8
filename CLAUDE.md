@@ -115,7 +115,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 |---|---|---|
 | `bringup-01` | Chip report, I²C census, V1/V2 revision detection. No display. | yes — full output in its README |
 | `01_project_template` | The scaffold. BSP init, display, touch, LVGL 9 screen with a tap counter, heap heartbeat. | yes — display, touch registration, 240 MHz, stable heap |
-| `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0–M2 and M4 done 2026-09-05: audio, continuous MultiNet7 (no wake word), word → card → chime loop, dimming, tap-to-replay. M3 (tune on the child), the SD/photo path, audible output and a real tap await a person and a card |
+| `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0–M2 and M4 done 2026-09-05: audio, continuous MultiNet7 (no wake word), word → card → chime loop, dimming, silent tap-to-wake. M3 (tune on the child), the SD/photo path, audible output and a real tap await a person and a card |
 
 ## ESP-IDF Environment
 
