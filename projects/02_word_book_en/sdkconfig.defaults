@@ -30,3 +30,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
+
+# ESP-SR: MultiNet7 English from the `model` partition; no WakeNet model selected
+# on purpose (the AFE is created with wakenet_init = false). NS and VAD stay on
+# the WebRTC defaults for now.
+CONFIG_MODEL_IN_FLASH=y
+CONFIG_SR_MN_EN_MULTINET7_QUANT=y
