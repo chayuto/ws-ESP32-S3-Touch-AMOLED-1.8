@@ -414,6 +414,9 @@ void app_main(void)
     s_tap = xSemaphoreCreateBinary();
 
     lv_display_t *disp = cards_display_start(); /* the i2c.master pull-up warning it logs is benign and stays visible */
+    if (disp == NULL) {
+        ESP_LOGE(TAG, "DISPLAY INIT FAILED - running blind; audio and recogniser continue");
+    }
     bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
     s_last_activity = xTaskGetTickCount();
     ESP_LOGI(TAG, "display up: %" PRId32 "x%" PRId32, lv_display_get_horizontal_resolution(disp),
@@ -558,10 +561,10 @@ void app_main(void)
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {
             last_beat = xTaskGetTickCount();
             char now[32];
-            ESP_LOGI(TAG, "alive: %s heard=%" PRIu32 " internal=%u psram=%u card=%d files=%d log=%d words=%u",
+            ESP_LOGI(TAG, "alive: %s heard=%" PRIu32 " internal=%u psram=%u card=%d files=%d log=%d words=%u screen=%s",
                      timesync_now_str(now, sizeof(now)), s_heard, heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      heap_caps_get_free_size(MALLOC_CAP_SPIRAM), sdcard_present(), s_files_ok, sdlog_active(),
-                     (unsigned)s_book.count);
+                     (unsigned)s_book.count, s_asleep ? "off" : s_dimmed ? "dim" : "on");
         }
     }
 }

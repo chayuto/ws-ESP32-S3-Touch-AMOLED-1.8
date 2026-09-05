@@ -80,3 +80,6 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_COLORS=n
 # The system event task logs Wi-Fi/netif lines at DEBUG; 2.3 KB overflowed.
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+# app_main does the book scan, recogniser start and the classifier session record on
+# the main task; 3.5 KB is too close. 
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

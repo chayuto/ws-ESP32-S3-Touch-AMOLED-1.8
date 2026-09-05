@@ -218,7 +218,7 @@ bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
     }
     const char *digit = photo ? NULL : number_digit(word->text);
     if (digit) {
-        char both[48];
+        char both[96];
         snprintf(both, sizeof(both), "%s  %s", word->text, sub);
         lv_label_set_text(s_word, digit);
         lv_label_set_text(s_word_shadow, digit);
