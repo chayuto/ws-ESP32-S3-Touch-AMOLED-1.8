@@ -46,3 +46,16 @@ CONFIG_FATFS_MAX_LFN=255
 
 # Word book: self-test on for development builds. Turn off for the toy.
 CONFIG_WORDBOOK_BOOT_SELFTEST=y
+
+# Display memory. The BSP allocates LVGL's draw buffer with MALLOC_CAP_DEFAULT and
+# ignores the DMA/PSRAM flags it is handed; anything over ALWAYSINTERNAL lands in
+# PSRAM, and then every SPI flush needs an internal DMA bounce buffer the size of
+# the transfer (73.6 KB at the default 100 lines). With Wi-Fi's static pools that
+# allocation failed and the screen stopped updating. A 40-line buffer (29 KB)
+# kept under ALWAYSINTERNAL lives in internal RAM, which is DMA-capable, so there
+# is no bounce buffer at all.
+CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=40
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=32768
+
+# Keep Wi-Fi / lwIP dynamic buffers in PSRAM where they can.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

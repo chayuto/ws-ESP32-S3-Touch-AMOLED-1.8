@@ -234,6 +234,14 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
   in the same area); what each drives is not yet established. Call `bsp_io_expander_init()`
   only when you need those lines. Do **not** carry over the C6 sibling's rule that the
   expander gates the display and touch rails — true on that board, not this one.
+- **Keep LVGL's draw buffer in internal RAM.** The BSP allocates it with plain
+  `MALLOC_CAP_DEFAULT` and ignores the DMA/PSRAM flags it is handed, so anything above
+  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` lands in PSRAM — and then every SPI flush needs an
+  internal DMA bounce buffer the size of the transfer. With Wi-Fi's pools resident that
+  allocation failed (`spi_master: Failed to allocate priv TX buffer`, screen frozen).
+  Fix that works: `CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=40` (29 KB) with
+  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=32768`, so the buffer is internal and DMA-capable
+  with no bounce at all. `02_word_book_en` carries this; any project adding Wi-Fi will need it.
 - **Touch LVGL only under the lock.** `bsp_display_lock(timeout_ms)` /
   `bsp_display_unlock()` around every LVGL call made outside an LVGL event callback.
   The LVGL task runs on its own; unlocked access from another task will corrupt it.
@@ -352,6 +360,6 @@ Honest list, so nobody builds on an assumption:
 - **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
 - **Battery operation** — never run off the MX1.25 connector.
-- **Wi-Fi.** `02_word_book_en` setup mode brings up a SoftAP + HTTP server; never run
-  on this unit yet. RAM headroom with the recogniser paused should be fine; measure.
+- **Wi-Fi as an AP, end to end.** The stack is linked and the board boots with it
+  (internal free fell from 147 KB to 121 KB); the AP itself has not been started yet.
 - **What the TCA9554 lines actually drive.**
