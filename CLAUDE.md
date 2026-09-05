@@ -358,6 +358,8 @@ Honest list, so nobody builds on an assumption:
 - **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
 - **Battery operation** — never run off the MX1.25 connector.
-- **Wi-Fi as an AP, end to end.** The stack is linked and the board boots with it
-  (internal free fell from 147 KB to 121 KB); the AP itself has not been started yet.
+- **Wi-Fi as an AP, end to end.** Tried in `02_word_book_en` on 2026-09-05: the driver
+  initialised and the AP started (`BOOT long press` → `wifi:` init lines), the phone side
+  did not work out, and the feature was removed the same day. Linking Wi-Fi cost 26 KB of
+  internal RAM and forced the LVGL buffer rule above. Untested past AP start.
 - **What the TCA9554 lines actually drive.**

@@ -40,3 +40,4 @@ docs/internal/
 # Device logs and captures
 logs/
 projects/*/logs/
+projects/*/assets/book/
