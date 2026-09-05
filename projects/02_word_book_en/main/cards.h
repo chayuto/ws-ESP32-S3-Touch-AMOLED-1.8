@@ -34,5 +34,9 @@ void cards_show_info(const char *title, const char *detail);
 /* Show an already-filled PHOTO_BYTES RGB565 buffer as a card, with a caption. */
 void cards_show_buffer(const uint8_t *rgb565, const char *caption);
 
+/* Diagnostics: force full brightness and redraw; re-run the panel init sequence. */
+void cards_force_bright(void);
+void cards_panel_reinit(void);
+
 /* One-line status at the bottom (self-test progress, card state). */
 void cards_status(const char *text);

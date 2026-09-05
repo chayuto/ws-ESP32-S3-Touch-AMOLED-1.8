@@ -97,13 +97,16 @@ static SemaphoreHandle_t s_tap;
 
 /* --- Screen brightness: bright while in use, dim after a quiet spell -------- */
 
+static TickType_t s_woke_at;
+
 static void wake_screen(void)
 {
     s_last_activity = xTaskGetTickCount();
+    s_woke_at = s_last_activity;
     if (s_dimmed) {
         s_dimmed = false;
-        bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
-        ESP_LOGI(TAG, "screen: bright");
+        esp_err_t err = bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
+        ESP_LOGI(TAG, "screen: bright (%d%%, write %s)", CONFIG_WORDBOOK_BRIGHTNESS, esp_err_to_name(err));
     }
 }
 
@@ -111,8 +114,9 @@ static void maybe_dim(void)
 {
     if (!s_dimmed && xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_DIM_AFTER_S * 1000)) {
         s_dimmed = true;
-        bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
-        ESP_LOGI(TAG, "screen: dim after %d s quiet", CONFIG_WORDBOOK_DIM_AFTER_S);
+        esp_err_t err = bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
+        ESP_LOGI(TAG, "screen: dim %d%% after %d s quiet (write %s)", CONFIG_WORDBOOK_DIM_BRIGHTNESS, CONFIG_WORDBOOK_DIM_AFTER_S,
+                 esp_err_to_name(err));
     }
 }
 
@@ -524,7 +528,10 @@ void app_main(void)
              * was trying to wake it. Sleep only from a fully lit screen. */
             if (s_asleep) {
                 leave_sleep();
-            } else if (s_dimmed) {
+            } else if (s_dimmed || xTaskGetTickCount() - s_woke_at < pdMS_TO_TICKS(3000)) {
+                /* A press on a dim screen, or a second press right after waking, is
+                 * someone making sure it is on. Never sleep on those (09:39: two presses
+                 * 1.7 s apart, the second put a just-woken board to sleep). */
                 wake_screen();
             } else {
                 enter_sleep("button");
@@ -541,6 +548,20 @@ void app_main(void)
                     esp_log_level_set(own_tags[i], ESP_LOG_DEBUG);
                 }
             }
+        } else if (cmd == 'p') {
+            pmu_dump_rails("on request");
+            pmu_status_t ps;
+            if (pmu_read(&ps) == ESP_OK) {
+                ESP_LOGI(TAG, "power: usb=%d %u mV, battery=%d %u mV %u%%, vsys %u mV, %s", ps.vbus_in, ps.vbus_mv, ps.batt_present,
+                         ps.vbat_mv, ps.batt_pct, ps.vsys_mv, ps.charging ? "charging" : "not charging");
+            }
+        } else if (cmd == 'b') {
+            s_dimmed = false;
+            s_last_activity = xTaskGetTickCount();
+            cards_force_bright();
+        } else if (cmd == 'x') {
+            cards_panel_reinit();
+            cards_show_idle();
         } else if (cmd == 'i') {
             char now[32];
             ESP_LOGI(TAG, "info: %s heard=%" PRIu32 " words=%u card=%d files=%d log=%ld B maint=%d asleep=%d internal=%u",

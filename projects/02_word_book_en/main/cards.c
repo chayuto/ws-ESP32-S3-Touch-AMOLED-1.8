@@ -39,6 +39,33 @@ static lv_image_dsc_t s_dsc[2];
 static int s_next;
 
 static cards_tap_cb_t s_on_tap;
+static esp_lcd_panel_handle_t s_panel;
+
+void cards_force_bright(void)
+{
+    esp_err_t err = bsp_display_brightness_set(100);
+    ESP_LOGI(TAG, "brightness 100: %s", esp_err_to_name(err));
+    if (bsp_display_lock(300)) {
+        lv_obj_invalidate(lv_screen_active());
+        bsp_display_unlock();
+    }
+}
+
+void cards_panel_reinit(void)
+{
+    if (s_panel == NULL) {
+        ESP_LOGW(TAG, "no panel handle");
+        return;
+    }
+    esp_err_t a = esp_lcd_panel_init(s_panel);
+    esp_err_t b = esp_lcd_panel_disp_on_off(s_panel, true);
+    esp_err_t c = bsp_display_brightness_set(100);
+    ESP_LOGI(TAG, "panel re-init: init %s, disp_on %s, brightness %s", esp_err_to_name(a), esp_err_to_name(b), esp_err_to_name(c));
+    if (bsp_display_lock(300)) {
+        lv_obj_invalidate(lv_screen_active());
+        bsp_display_unlock();
+    }
+}
 
 #define DRAW_LINES 20 /* 368 x 20 x 2 = 14,720 B, internal DMA */
 
@@ -54,6 +81,7 @@ lv_display_t *cards_display_start(void)
     if (bsp_display_new(&dcfg, &panel, &io) != ESP_OK) {
         return NULL;
     }
+    s_panel = panel;
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io,
         .panel_handle = panel,
@@ -77,7 +105,8 @@ lv_display_t *cards_display_start(void)
     } else {
         ESP_LOGW(TAG, "no touch controller");
     }
-    bsp_display_brightness_init();
+    esp_err_t berr = bsp_display_brightness_init();
+    ESP_LOGI(TAG, "panel up: brightness init %s", esp_err_to_name(berr));
     return disp;
 }
 
@@ -182,10 +211,11 @@ void cards_show_idle(void)
         return;
     }
     lv_obj_add_flag(s_photo, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x1f2937), 0);
+    /* A colour that is plainly "on" even when dimmed; the old near-black read as off. */
+    lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x2563EB), 0);
     lv_label_set_text(s_word, "say a word");
     lv_label_set_text(s_word_shadow, "say a word");
-    lv_label_set_text(s_sub, "");
+    lv_label_set_text(s_sub, "dog  cat  ball  three ...");
     place_word(false);
     bsp_display_unlock();
 }

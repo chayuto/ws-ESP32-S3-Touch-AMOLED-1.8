@@ -62,9 +62,9 @@ menu "Word book"
     config WORDBOOK_DIM_BRIGHTNESS
         int "Display brightness when idle (0-100)"
         range 0 100
-        default 35
+        default 50
         help
-            12 read as "screen off" on this AMOLED with the dark idle card.
+            12 and 35 both read as "screen off" on this AMOLED with a dark card.
 
     config WORDBOOK_SLEEP_AFTER_S
         int "Minutes of quiet before the screen turns off and listening stops"
