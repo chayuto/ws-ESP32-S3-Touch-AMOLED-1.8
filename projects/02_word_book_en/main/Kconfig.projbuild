@@ -1,0 +1,34 @@
+menu "Word book"
+
+    config WORDBOOK_BOOT_SELFTEST
+        bool "Run the recogniser self-test at boot"
+        default y
+        help
+            Feeds three embedded synthesised clips through the recogniser after
+            start-up and shows each result with its card and chime. Proves the
+            engine over serial with nobody present. Turn off for the toy build;
+            it costs about 15 seconds and three chimes on every boot.
+
+    config WORDBOOK_VOLUME
+        int "Speaker volume (0-100)"
+        range 0 100
+        default 90
+        help
+            The vendor example uses 90 on V2 hardware and 70 on V1.
+
+    config WORDBOOK_BRIGHTNESS
+        int "Display brightness when active (0-100)"
+        range 1 100
+        default 85
+
+    config WORDBOOK_DIM_BRIGHTNESS
+        int "Display brightness when idle (0-100)"
+        range 0 100
+        default 12
+
+    config WORDBOOK_DIM_AFTER_S
+        int "Seconds of quiet before dimming"
+        range 5 3600
+        default 60
+
+endmenu

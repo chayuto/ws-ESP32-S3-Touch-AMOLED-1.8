@@ -43,3 +43,6 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 # Book files are named by word (dog.rgb565); FAT 8.3 cannot hold that extension.
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+
+# Word book: self-test on for development builds. Turn off for the toy.
+CONFIG_WORDBOOK_BOOT_SELFTEST=y

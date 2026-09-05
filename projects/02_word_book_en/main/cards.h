@@ -2,8 +2,10 @@
 
 #include "book.h"
 
-/* Build the screen. Call under the display lock. */
-void cards_init(void);
+typedef void (*cards_tap_cb_t)(void);
+
+/* Build the screen. Call under the display lock. `on_tap` fires from the LVGL task. */
+void cards_init(cards_tap_cb_t on_tap);
 
 /* Show the idle card. Takes the display lock itself. */
 void cards_show_idle(void);

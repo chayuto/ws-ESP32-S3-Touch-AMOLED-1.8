@@ -10,11 +10,11 @@
 #include "driver/i2s_std.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "audio_io";
 
-/* The vendor's own example uses 90 on V2 hardware and 70 on V1. This unit is V2. */
-#define SPEAKER_VOLUME 90
+#define SPEAKER_VOLUME CONFIG_WORDBOOK_VOLUME
 #define MIC_GAIN_DB    30.0f
 
 esp_err_t audio_io_init(audio_io_t *io)

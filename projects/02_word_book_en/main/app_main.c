@@ -22,10 +22,12 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "player.h"
 #include "recognizer.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "wordbook";
 
@@ -56,6 +58,37 @@ static book_t s_book;
 static word_def_t s_defs[BOOK_MAX_WORDS];
 static QueueHandle_t s_events;
 static uint32_t s_heard;
+static int s_last_word = -1;
+static TickType_t s_last_activity;
+static bool s_dimmed;
+static SemaphoreHandle_t s_tap;
+
+/* --- Screen brightness: bright while in use, dim after a quiet spell -------- */
+
+static void wake_screen(void)
+{
+    s_last_activity = xTaskGetTickCount();
+    if (s_dimmed) {
+        s_dimmed = false;
+        bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
+        ESP_LOGI(TAG, "screen: bright");
+    }
+}
+
+static void maybe_dim(void)
+{
+    if (!s_dimmed && xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_DIM_AFTER_S * 1000)) {
+        s_dimmed = true;
+        bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
+        ESP_LOGI(TAG, "screen: dim after %d s quiet", CONFIG_WORDBOOK_DIM_AFTER_S);
+    }
+}
+
+/* From the LVGL task: just flag it, the main loop does the work. */
+static void on_tap(void)
+{
+    xSemaphoreGive(s_tap);
+}
 
 /* React to a word exactly as the child will see it. */
 static void on_word(const word_event_t *ev)
@@ -65,8 +98,26 @@ static void on_word(const word_event_t *ev)
     }
     const book_word_t *w = &s_book.words[ev->id];
     s_heard++;
+    s_last_word = ev->id;
     ESP_LOGI(TAG, "heard '%s' prob=%.3f -> %s card", w->text, ev->prob, w->photo[0] ? "photo" : "text");
+    wake_screen();
     cards_show_word(w, ev->prob, s_heard);
+    player_chime();
+    if (w->prompt[0]) {
+        player_wav(w->prompt);
+    }
+}
+
+/* Tap the picture: hear it again. Also the way to un-dim without saying anything. */
+static void replay_last(void)
+{
+    wake_screen();
+    if (s_last_word < 0) {
+        ESP_LOGI(TAG, "tap: nothing to replay yet");
+        return;
+    }
+    const book_word_t *w = &s_book.words[s_last_word];
+    ESP_LOGI(TAG, "tap: replay '%s'", w->text);
     player_chime();
     if (w->prompt[0]) {
         player_wav(w->prompt);
@@ -126,17 +177,19 @@ static void self_test(void)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "02_word_book_en M2 starting");
+    ESP_LOGI(TAG, "02_word_book_en starting");
     s_events = xQueueCreate(8, sizeof(word_event_t));
+    s_tap = xSemaphoreCreateBinary();
 
     esp_log_level_set("i2c.master", ESP_LOG_ERROR);
     lv_display_t *disp = bsp_display_start();
     esp_log_level_set("i2c.master", ESP_LOG_INFO);
-    bsp_display_brightness_set(85);
+    bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
+    s_last_activity = xTaskGetTickCount();
     ESP_LOGI(TAG, "display up: %" PRId32 "x%" PRId32, lv_display_get_horizontal_resolution(disp),
              lv_display_get_vertical_resolution(disp));
     if (bsp_display_lock(1000)) {
-        cards_init();
+        cards_init(on_tap);
         bsp_display_unlock();
     }
     cards_show_idle();
@@ -166,8 +219,10 @@ void app_main(void)
         return;
     }
 
+#if CONFIG_WORDBOOK_BOOT_SELFTEST
     vTaskDelay(pdMS_TO_TICKS(1500));
     self_test();
+#endif
 
     char status[48];
     snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_book.from_sd ? " from SD" : ", built-in");
@@ -176,10 +231,14 @@ void app_main(void)
     TickType_t last_beat = xTaskGetTickCount();
     for (;;) {
         word_event_t ev;
-        if (xQueueReceive(s_events, &ev, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        if (xQueueReceive(s_events, &ev, pdMS_TO_TICKS(250)) == pdTRUE) {
             on_word(&ev);
             xQueueReset(s_events); /* anything heard while the chime played was us */
         }
+        if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
+            replay_last();
+        }
+        maybe_dim();
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {
             last_beat = xTaskGetTickCount();
             ESP_LOGI(TAG, "alive: heard=%" PRIu32 " internal=%u psram=%u", s_heard,

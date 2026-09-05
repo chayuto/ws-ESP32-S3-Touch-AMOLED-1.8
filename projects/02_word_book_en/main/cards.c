@@ -33,10 +33,21 @@ static uint8_t *s_buf[2];
 static lv_image_dsc_t s_dsc[2];
 static int s_next;
 
+static cards_tap_cb_t s_on_tap;
+
+static void screen_pressed_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_on_tap) {
+        s_on_tap();
+    }
+}
+
 static const uint32_t s_palette[] = {0xC2410C, 0x1D4ED8, 0xBE185D, 0x047857, 0x7C3AED, 0xB45309, 0x0E7490, 0x9F1239};
 
-void cards_init(void)
+void cards_init(cards_tap_cb_t on_tap)
 {
+    s_on_tap = on_tap;
     for (int i = 0; i < 2; i++) {
         s_buf[i] = heap_caps_malloc(CARD_BYTES, MALLOC_CAP_SPIRAM);
         if (s_buf[i] == NULL) {
@@ -54,9 +65,12 @@ void cards_init(void)
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(scr, screen_pressed_cb, LV_EVENT_PRESSED, NULL);
 
     s_photo = lv_image_create(scr);
     lv_obj_set_size(s_photo, CARD_W, CARD_H);
+    lv_obj_clear_flag(s_photo, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(s_photo, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_add_flag(s_photo, LV_OBJ_FLAG_HIDDEN);
 

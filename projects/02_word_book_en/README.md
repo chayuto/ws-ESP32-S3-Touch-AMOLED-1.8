@@ -10,8 +10,8 @@ Built in milestones, each verified on hardware before the next.
 | **M0** | Mic → PSRAM → speaker at 16 kHz mono | **done 2026-09-05** |
 | **M1** | MultiNet7 recognises words, no wake word | **done 2026-09-05** |
 | **M2** | `words.json` + photos on SD; word → card + chime + prompt | **done 2026-09-05** — see below; SD path awaits a card |
-| M3 | The child uses it; tune on the real voice | |
-| M4 | Idle screen, dimming, make it a toy | |
+| M3 | The child uses it; tune on the real voice | needs the child |
+| **M4** | Idle screen, dimming, tap to replay, make it a toy | **done 2026-09-05** — dim verified; tap needs a finger |
 
 ## Build, flash, watch
 
@@ -21,6 +21,18 @@ idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en build
 idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en -p /dev/cu.usbmodem3101 flash
 ~/.espressif/python_env/idf5.5_py3.14_env/bin/python .claude/skills/serial-capture/scripts/capture.py --seconds 16
 ```
+
+## M4 — making it a toy
+
+- **Dims after a quiet minute** (`CONFIG_WORDBOOK_DIM_AFTER_S`, to `CONFIG_WORDBOOK_DIM_BRIGHTNESS`);
+  any word or tap brings it back. Verified: `screen: dim after 60 s quiet` at 75.9 s, sixty
+  seconds after the last self-test word.
+- **Tap the picture to hear it again** — chime plus prompt for the last word. Also the way
+  to wake the screen without saying anything. Not yet tapped by a person.
+- **Boot self-test is a Kconfig switch** (`CONFIG_WORDBOOK_BOOT_SELFTEST`, on in
+  `sdkconfig.defaults`). Turn it off for the toy build: it costs fifteen seconds and three
+  chimes per boot. Volume and brightness are Kconfig too — `idf.py menuconfig` → *Word book*.
+- Idle behaviour: stays on the last card. Boot shows "say a word".
 
 ## M2 — the whole loop
 
