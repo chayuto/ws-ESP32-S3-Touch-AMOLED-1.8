@@ -1,4 +1,4 @@
-# 02_picture_book — a voice-triggered picture book for a toddler
+# 02_word_book_en — a voice-triggered picture book for a toddler
 
 *Design note, 2026-09-05. Status: proposed, not started.*
 
@@ -14,6 +14,14 @@ From the child's side:
 3. Within half a second the family dog's photo fills the screen, a small chime plays, and
    a parent's recorded voice says "Dog!"
 4. It stays there until the next word.
+
+If a word is recognised but has no photo yet, the screen shows **the word itself**, large,
+with the same chime. Two reasons this matters more than it looks:
+
+- The vocabulary can be bigger than the photo set. Add photos as you take them; the book
+  grows without the firmware knowing.
+- M2 can be built and verified with *zero* photos — the text card proves the whole loop
+  before any content work is done.
 
 That's it. The thing it is practising is *saying the word and getting a response*. It is
 not a quiz; it does not mark the child wrong. If the child mumbles something dog-shaped,
@@ -117,9 +125,10 @@ in a way that also happens to be language-agnostic.
   idle.rgb565
 ```
 
-`words.json` maps each word to its MultiNet command ID, its phoneme variants, its photo
-and its prompt. The firmware reads it at boot and builds the command list from it — so
-**the vocabulary is data, not code.**
+`words.json` maps each word to its MultiNet command ID, its phoneme variants, and
+*optionally* its photo and prompt. The firmware reads it at boot and builds the command
+list from it — so **the vocabulary is data, not code.** A word with no photo shows as a
+text card; a word with no prompt just gets the chime.
 
 A host-side Python script (`tools/make_book.py`, Pillow) takes a folder of ordinary
 photos + recordings and produces this layout: crop-to-fit, resize to 368×448, convert to
@@ -185,15 +194,26 @@ project 2's fallback rather than project 3's plan.
 
 M0 and M1 are the two unknowns; everything after them is assembly.
 
-## Open decisions
+## Decisions
 
-1. **Project name.** `02_picture_book` is the placeholder. `02_word_book`? `02_say_it`?
-2. **The word list.** Which 10–20 words — driven by which photos exist.
-3. **Whose voice** records the prompts, and in which language for v1 (English words,
-   but the prompt voice could already be Thai — the output side doesn't care).
-4. **Idle behaviour.** Blank, a slideshow of the photos, or the last photo shown?
-5. **Go/no-go on M1 before M2.** If MultiNet won't run without WakeNet, pick fallback
+- **Name: `02_word_book_en`.** "Word book" is what it is — say a word, see the thing —
+  and the language suffix makes the sequence read naturally: `02_word_book_en` now,
+  `03_word_book_multi` (or `_th`) later, same firmware shape, different recogniser.
+- **No photo → text card.** Decided above.
+
+## Still open
+
+1. **The word list.** Which 10–20 words — driven by which photos exist. Default until
+   told otherwise: the starter list in *Recognition*.
+2. **Whose voice** records the prompts, and in which language for v1 (English words,
+   but the prompt voice could already be Thai — the output side doesn't care). Default:
+   chime only until recordings exist; the text card covers the gap.
+3. **Idle behaviour.** Blank, a slideshow of the photos, or the last photo shown?
+   Default: stay on the last card.
+4. **Go/no-go on M1 before M2.** If MultiNet won't run without WakeNet, pick fallback
    (parent-spoken wake word) or jump straight to the DTW recogniser.
+
+None of these block M0 or M1.
 
 ## Sources
 
