@@ -92,28 +92,35 @@ mono WAV, and writes `words.json`. Needs Pillow; uses `afconvert` for audio on m
 A word with no photo shows as a large text card. A word with no prompt gets the chime
 only. Up to 32 words.
 
-### Putting the book on the card
+### Putting photos on the card — drag them in, that is all
 
-The ready-made book folder is **`assets/book/`** — ten cards for the built-in words from
-the Commons photographs in `assets/photos/` (authors and licences in
-`assets/photos/CREDITS.md`). It is generated, not committed; one command makes it:
+Make a folder called **`book`** at the root of the card and **drop JPEGs into it, named
+after the word**: `dog.jpg`, `cat.jpg`, `ice_cream.jpg` (underscore = space). The filename
+is the word; nothing else is needed. The board decodes the JPEG itself (≈220–370 ms for
+a 1 MP photo, a 12 MP iPhone shot is scaled 1/4 in the decoder first), centre-crops it to
+the screen and caches the result as `<word>.rgb565` beside it so the next showing is a
+plain read. Optional beside a photo: `dog.wav` (16 kHz mono) as the spoken prompt.
 
-```zsh
-python3 tools/make_book.py assets/photos assets/book
+```
+SD card root
+└── book/
+    ├── dog.jpg
+    ├── cat.jpg
+    ├── dog.wav          ← optional prompt
+    ├── dog.rgb565       ← written by the board; ignore, or delete to force a re-decode
+    └── words.json       ← optional: text-only words, or pointing a word at another file
 ```
 
-Then eject the card, put it in a reader, and **drag `book` onto the card's root** so it
-is `/book/words.json` and friends. Put the card back in the board — no reboot needed;
-within five seconds the log says `book: loaded ... 10 words, 10 photos` and "dog" shows
-the dog.
+Only `.jpg`/`.jpeg` (and `.rgb565`) are read; a `.png` or `.heic` is logged and skipped.
+Up to 32 words. The card can be inserted or removed while running; the book reloads
+within five seconds.
 
-To add or change words: drop photos named after the word into `assets/photos/`
-(`banana.jpg`), rerun the command, recopy `book`. Recordings of a voice saying the word
-(`banana.m4a`) go in the same folder and become the prompt.
+Starter set: the ten Commons photographs in `assets/photos/` (authors and licences in
+`assets/photos/CREDITS.md`) — drag them straight onto the card. `tools/make_book.py`
+still exists for pre-converting or resampling recordings, but nobody needs to run it.
 
-A Wi-Fi drag-and-drop setup page was tried on 2026-09-05 and removed the same day: the
-board brought the access point up, the phone side did not work out, and a card reader
-does the job with no radio at all.
+Verified 2026-09-05: ten JPEGs dropped on the card, all found; `cat.jpg` 960×960 shown
+in 369 ms then cached; the embedded-JPEG self-test decodes in 224 ms on every boot.
 
 ### The card can come and go
 
@@ -212,11 +219,8 @@ stays at 181 KB.
 
 ### Not verified yet
 
-- **The SD path.** No card was available. `bsp_sdcard_mount()` fails cleanly without one
-  and the fallback runs; a card with `tools/make_book.py --demo` output is the test. Insert
-  it while the board is running — that exercises hot-insert and the live vocabulary swap
-  at the same time.
-- **Prompt playback from a file** — needs a card. The chime itself has been heard.
+- **Prompt playback from a file** — no `.wav` has been put on the card yet. The chime
+  itself has been heard.
 
 Two quirks worth knowing: the BSP warns *Long filenames on SD card are disabled* on every
 boot because it tests `CONFIG_FATFS_LONG_FILENAMES`, which is a Kconfig choice name, not
@@ -337,6 +341,7 @@ main/sdcard.[ch]       card presence: polled mount / status, no card-detect pin
 main/sdlog.[ch]        ESP_LOG mirror → /sdcard/02_word_book_en.log, append, 2 s sync
 main/pcf85063.[ch]     the RTC: read, set, CLKOUT off
 main/timesync.[ch]     NTP → RTC → build time, at boot
+main/photo.[ch]        JPEG decode (esp_new_jpeg) + centre-crop/box-filter to 368×448 + card cache
 main/button.[ch]       BOOT button (GPIO 0), polled: press = sleep / wake
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)

@@ -250,6 +250,9 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
   vendor example `90_axp2101_pmu` as the reference sequence.
 - **ESP32-S3 is dual-core** — `xTaskCreatePinnedToCore()` is valid here, unlike on the
   single-core C6 sibling boards.
+- **JPEG decode is software, via `esp_new_jpeg` (already a BSP dependency).** ~220 ms
+  for 1 MP to RGB565 on this chip; the decoder scales 1/2–1/8 in-loop so a 12 MP photo
+  fits PSRAM. Output must be 16-byte aligned. Verified in `02_word_book_en`.
 - **PSRAM is 8 MB octal** — full framebuffers and LVGL buffers belong there.
   368×448×2 bytes = 330 KB per full-screen RGB565 buffer, which does not fit comfortably
   in internal RAM.
@@ -351,7 +354,8 @@ Honest list, so nobody builds on an assumption:
   are the working values.
 - ~~Touch~~ — confirmed 2026-09-05: taps logged from the CST820 through LVGL in `02_word_book_en`.
 - ~~microSD~~ — confirmed 2026-09-05: SanDisk 16 GB mounts in 56–224 ms, log file appends,
-  hot removal and reinsertion handled live. The photo path (`book/`) is still unexercised.
+  hot removal and reinsertion handled live, JPEGs read and decoded from it, 330 KB cache
+  files written back (~1.5 s each — SDMMC 1-bit writes are slow).
 - **microSD, before that** — no card has been in the slot. `bsp_sdcard_mount()` fails cleanly without
   one (`sdmmc_init_ocr ... 0x107`, ~27–50 ms). `02_word_book_en` has the full read path
   written plus hot-insert, removal-while-running and a live vocabulary swap, all

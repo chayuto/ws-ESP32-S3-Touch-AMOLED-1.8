@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #include "book.h"
 
 typedef void (*cards_tap_cb_t)(void);
@@ -16,6 +18,9 @@ void cards_show_idle(void);
  * Takes the display lock itself. Photo load is from file into PSRAM.
  */
 bool cards_show_word(const book_word_t *word, float confidence, unsigned nth);
+
+/* Show an already-filled PHOTO_BYTES RGB565 buffer as a card, with a caption. */
+void cards_show_buffer(const uint8_t *rgb565, const char *caption);
 
 /* One-line status at the bottom (self-test progress, card state). */
 void cards_status(const char *text);

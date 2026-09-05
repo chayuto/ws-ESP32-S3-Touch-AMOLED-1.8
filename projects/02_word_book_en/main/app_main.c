@@ -28,6 +28,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "photo.h"
 #include "player.h"
 #include "recognizer.h"
 #include "sdcard.h"
@@ -233,6 +234,27 @@ static bool wait_for_word(uint32_t wait_ms, word_event_t *best)
     return any;
 }
 
+/* Decode an embedded JPEG and show it: proves the photo path with no card at all. */
+extern const uint8_t testjpg_start[] asm("_binary_baby_jpg_start");
+extern const uint8_t testjpg_end[] asm("_binary_baby_jpg_end");
+
+static void photo_self_test(void)
+{
+    uint8_t *buf = heap_caps_malloc(PHOTO_BYTES, MALLOC_CAP_SPIRAM);
+    if (buf == NULL) {
+        return;
+    }
+    int w = 0, h = 0;
+    if (photo_from_jpeg(testjpg_start, (size_t)(testjpg_end - testjpg_start), buf, &w, &h)) {
+        ESP_LOGI(TAG, "photo self-test: embedded %dx%d JPEG decoded and shown  [PASS]", w, h);
+        cards_show_buffer(buf, "photo test");
+        vTaskDelay(pdMS_TO_TICKS(1500));
+    } else {
+        ESP_LOGE(TAG, "photo self-test: decode failed  [FAIL]");
+    }
+    free(buf);
+}
+
 static void self_test(void)
 {
     int pass = 0;
@@ -357,7 +379,8 @@ void app_main(void)
     }
 
 #if CONFIG_WORDBOOK_BOOT_SELFTEST
-    vTaskDelay(pdMS_TO_TICKS(1500));
+    photo_self_test();
+    vTaskDelay(pdMS_TO_TICKS(500));
     self_test();
 #endif
 

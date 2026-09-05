@@ -13,16 +13,16 @@
 #include "bsp/esp-bsp.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "photo.h"
 #include "lvgl.h"
 
 static const char *TAG = "cards";
 
 LV_FONT_DECLARE(lv_font_montserrat_72);
 
-#define CARD_W      368
-#define CARD_H      448
-#define CARD_BYTES  (CARD_W * CARD_H * 2)
+#define CARD_W      PHOTO_W
+#define CARD_H      PHOTO_H
+#define CARD_BYTES  PHOTO_BYTES
 
 static lv_obj_t *s_photo;
 static lv_obj_t *s_word;
@@ -133,31 +133,6 @@ void cards_show_idle(void)
     bsp_display_unlock();
 }
 
-static bool load_photo(const char *path, uint8_t *dst)
-{
-    int64_t t0 = esp_timer_get_time();
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) {
-        ESP_LOGW(TAG, "open failed: %s", path);
-        return false;
-    }
-    size_t got = 0;
-    while (got < CARD_BYTES) {
-        size_t n = fread(dst + got, 1, CARD_BYTES - got, f);
-        if (n == 0) {
-            break;
-        }
-        got += n;
-    }
-    fclose(f);
-    if (got != CARD_BYTES) {
-        ESP_LOGW(TAG, "%s: %u bytes, expected %u", path, (unsigned)got, (unsigned)CARD_BYTES);
-        return false;
-    }
-    ESP_LOGI(TAG, "photo %s loaded in %" PRId64 " ms", path, (esp_timer_get_time() - t0) / 1000);
-    return true;
-}
-
 bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
 {
     char sub[32];
@@ -166,7 +141,7 @@ bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
     bool photo = false;
     int slot = s_next;
     if (word->photo[0] && s_buf[slot] != NULL) {
-        photo = load_photo(word->photo, s_buf[slot]);
+        photo = photo_load(word->photo, s_buf[slot]);
     }
 
     if (!bsp_display_lock(300)) {
@@ -190,6 +165,26 @@ bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
     place_word(photo);
     bsp_display_unlock();
     return photo;
+}
+
+void cards_show_buffer(const uint8_t *rgb565, const char *caption)
+{
+    int slot = s_next;
+    if (s_buf[slot] == NULL) {
+        return;
+    }
+    memcpy(s_buf[slot], rgb565, CARD_BYTES);
+    if (!bsp_display_lock(300)) {
+        return;
+    }
+    lv_image_set_src(s_photo, &s_dsc[slot]);
+    lv_obj_clear_flag(s_photo, LV_OBJ_FLAG_HIDDEN);
+    s_next ^= 1;
+    lv_label_set_text(s_word, caption);
+    lv_label_set_text(s_word_shadow, caption);
+    lv_label_set_text(s_sub, "");
+    place_word(true);
+    bsp_display_unlock();
 }
 
 void cards_status(const char *text)
