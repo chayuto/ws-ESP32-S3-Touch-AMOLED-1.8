@@ -414,6 +414,11 @@ void app_main(void)
             xQueueReset(s_events); /* anything heard while the chime played was us */
         }
         button_event_t bev = button_poll();
+        if (bev != BUTTON_NONE) {
+            ESP_LOGI(TAG, "BOOT %s press", bev == BUTTON_LONG ? "long" : "short");
+        }
+        /* The card can come and go whether we are awake, asleep or in setup. */
+        bool card_changed = sdcard_poll();
         if (bev == BUTTON_LONG) {
             if (s_setup) {
                 leave_setup();
@@ -427,21 +432,25 @@ void app_main(void)
                 enter_sleep("button");
             }
         }
+        if (card_changed) {
+            if (sdcard_present()) {
+                card_arrived(false);
+            } else {
+                card_left();
+            }
+        }
         if (s_setup) {
             xQueueReset(s_events);
             xSemaphoreTake(s_tap, 0);
             if (webui_take_book_changed() && sdcard_present()) {
                 card_arrived(false); /* same path as a freshly inserted card */
             }
-            if (sdcard_poll() && !sdcard_present()) {
-                card_left();
-            }
             continue;
         }
         if (s_asleep) {
             xQueueReset(s_events);
             xSemaphoreTake(s_tap, 0);
-            continue; /* nothing else runs while asleep; the loop still turns for the button */
+            continue; /* nothing else runs while asleep; the loop still turns for the button and card */
         }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
             on_tap_main();
@@ -449,13 +458,6 @@ void app_main(void)
         if (xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_SLEEP_AFTER_S * 60 * 1000)) {
             enter_sleep("quiet");
             continue;
-        }
-        if (sdcard_poll()) {
-            if (sdcard_present()) {
-                card_arrived(false);
-            } else {
-                card_left();
-            }
         }
         maybe_dim();
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {

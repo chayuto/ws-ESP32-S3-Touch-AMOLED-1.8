@@ -344,15 +344,13 @@ Port code from it by concept, never by pin number.
 
 Honest list, so nobody builds on an assumption:
 
-- **Touch coordinates.** The CST820 is found and the LVGL indev is registered, but no
-  physical tap has been logged. `01_project_template` prints `touch #N at x= y=` on tap
-  and carries the running total in its heartbeat. Use the **stty/dd** attach from the
-  `serial-capture` skill, not the pyserial script — a pyserial open resets the board and
-  zeroes the counter, which is what defeated the first two attempts.
 - **Audio: verified end to end.** Mic → ESP-SR recognises live adult speech (five for
   five, `02_word_book_en`), speaker chime heard by a person. Mic gain 30 dB and volume 90
   are the working values.
-- **microSD** — no card has been in the slot. `bsp_sdcard_mount()` fails cleanly without
+- ~~Touch~~ — confirmed 2026-09-05: taps logged from the CST820 through LVGL in `02_word_book_en`.
+- ~~microSD~~ — confirmed 2026-09-05: SanDisk 16 GB mounts in 56–224 ms, log file appends,
+  hot removal and reinsertion handled live. The photo path (`book/`) is still unexercised.
+- **microSD, before that** — no card has been in the slot. `bsp_sdcard_mount()` fails cleanly without
   one (`sdmmc_init_ocr ... 0x107`, ~27–50 ms). `02_word_book_en` has the full read path
   written plus hot-insert, removal-while-running and a live vocabulary swap, all
   untested; a card with `tools/make_book.py --demo` output, inserted while running,
