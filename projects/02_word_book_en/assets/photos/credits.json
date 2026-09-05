@@ -1,0 +1,82 @@
+{
+ "dog": {
+  "file": "File:Golden Retriever Hund Dog.JPG",
+  "page": "https://commons.wikimedia.org/wiki/File:Golden_Retriever_Hund_Dog.JPG",
+  "license": "CC BY 3.0",
+  "artist": "Kintaiyo",
+  "source_px": "1200x798",
+  "stored_px": "960x638"
+ },
+ "cat": {
+  "file": "File:Long Haired Tabby Domestic Cat Face.jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Long_Haired_Tabby_Domestic_Cat_Face.jpg",
+  "license": "CC BY-SA 4.0",
+  "artist": "BessieMaelstrom",
+  "source_px": "2139x2140",
+  "stored_px": "960x960"
+ },
+ "ball": {
+  "file": "File:Soccer Ball (46208304925).jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Soccer_Ball_(46208304925).jpg",
+  "license": "CC BY 2.0",
+  "artist": "Wutthichai Charoenburi from Bangkok",
+  "source_px": "5472x3648",
+  "stored_px": "960x640"
+ },
+ "duck": {
+  "file": "File:Mallard drake Hainault CP (Explored) - Flickr - alanshearman001.jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Mallard_drake_Hainault_CP_(Explored)_-_Flickr_-_alanshearman001.jpg",
+  "license": "CC0",
+  "artist": "Alan Shearman from London",
+  "source_px": "9504x6336",
+  "stored_px": "960x640"
+ },
+ "baby": {
+  "file": "File:Baby Face.JPG",
+  "page": "https://commons.wikimedia.org/wiki/File:Baby_Face.JPG",
+  "license": "CC BY-SA 4.0",
+  "artist": "Avsar Aras",
+  "source_px": "3809x2764",
+  "stored_px": "960x697"
+ },
+ "car": {
+  "file": "File:Red Smart Car Side View Driveway.jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Red_Smart_Car_Side_View_Driveway.jpg",
+  "license": "CC0",
+  "artist": "TudorTulok",
+  "source_px": "4032x3024",
+  "stored_px": "960x720"
+ },
+ "shoe": {
+  "file": "File:Forgotten children's sneakers in R\u00e5g\u00e5rdsdal 1.jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Forgotten_children%27s_sneakers_in_R%C3%A5g%C3%A5rdsdal_1.jpg",
+  "license": "CC BY-SA 4.0",
+  "artist": "W.carter",
+  "source_px": "4418x2945",
+  "stored_px": "960x640"
+ },
+ "bird": {
+  "file": "File:Erithacus rubecula profile.jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Erithacus_rubecula_profile.jpg",
+  "license": "CC BY-SA 4.0",
+  "artist": "C-M",
+  "source_px": "3945x3945",
+  "stored_px": "960x960"
+ },
+ "apple": {
+  "file": "File:Honeycrisp-Apple.jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Honeycrisp-Apple.jpg",
+  "license": "CC0",
+  "artist": "Evan-Amos",
+  "source_px": "2880x2600",
+  "stored_px": "960x867"
+ },
+ "book": {
+  "file": "File:A Stack of Books.png",
+  "page": "https://commons.wikimedia.org/wiki/File:A_Stack_of_Books.png",
+  "license": "CC BY-SA 4.0",
+  "artist": "Kasharp",
+  "source_px": "3264x2448",
+  "stored_px": "960x720"
+ }
+}

@@ -54,7 +54,7 @@ def to_rgb565(img: Image.Image) -> bytes:
 
     out = bytearray(W * H * 2)
     i = 0
-    for r, g, b in img.getdata():
+    for r, g, b in img.get_flattened_data() if hasattr(img, 'get_flattened_data') else img.getdata():
         v = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
         out[i] = v & 0xFF
         out[i + 1] = v >> 8
@@ -112,8 +112,8 @@ def main() -> int:
         src = Path(args.src)
         for p in sorted(src.iterdir()):
             stem, ext = p.stem.strip().upper(), p.suffix.lower()
-            if not stem or stem.startswith("."):
-                continue
+            if not stem or stem.startswith(".") or ext not in PHOTO_EXT | AUDIO_EXT:
+                continue  # credits, notes, dotfiles: not words
             entry = words.setdefault(stem, {})
             if ext in PHOTO_EXT:
                 (dst / f"{stem.lower()}.rgb565").write_bytes(to_rgb565(Image.open(p)))
