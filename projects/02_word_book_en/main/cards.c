@@ -84,6 +84,14 @@ void cards_init(cards_tap_cb_t on_tap)
     lv_obj_set_style_text_font(s_word, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_word, lv_color_white(), 0);
 
+    /* 48 px is the largest built-in Montserrat; scale both labels up 1.4x about their centre. */
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *l = i ? s_word : s_word_shadow;
+        lv_obj_set_style_transform_scale(l, 358, 0); /* 256 = 1.0 */
+        lv_obj_set_style_transform_pivot_x(l, lv_pct(50), 0);
+        lv_obj_set_style_transform_pivot_y(l, lv_pct(50), 0);
+    }
+
     s_sub = lv_label_create(scr);
     lv_obj_set_style_text_font(s_sub, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_sub, lv_color_hex(0xdddddd), 0);
@@ -100,11 +108,11 @@ static void place_word(bool over_photo)
 {
     if (over_photo) {
         lv_obj_align(s_word, LV_ALIGN_BOTTOM_MID, 0, -64);
-        lv_obj_align(s_word_shadow, LV_ALIGN_BOTTOM_MID, 3, -61);
+        lv_obj_align(s_word_shadow, LV_ALIGN_BOTTOM_MID, 2, -62);
         lv_obj_align(s_sub, LV_ALIGN_BOTTOM_MID, 0, -36);
     } else {
         lv_obj_align(s_word, LV_ALIGN_CENTER, 0, -10);
-        lv_obj_align(s_word_shadow, LV_ALIGN_CENTER, 3, -7);
+        lv_obj_align(s_word_shadow, LV_ALIGN_CENTER, 2, -8);
         lv_obj_align(s_sub, LV_ALIGN_CENTER, 0, 44);
     }
 }

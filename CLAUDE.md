@@ -115,7 +115,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 |---|---|---|
 | `bringup-01` | Chip report, I²C census, V1/V2 revision detection. No display. | yes — full output in its README |
 | `01_project_template` | The scaffold. BSP init, display, touch, LVGL 9 screen with a tap counter, heap heartbeat. | yes — display, touch registration, 240 MHz, stable heap |
-| `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0–M2 and M4 done 2026-09-05: audio, continuous MultiNet7 (no wake word), word → card → chime loop, dimming, silent tap-to-wake. M3 (tune on the child), the SD/photo path, audible output and a real tap await a person and a card |
+| `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0–M2 and M4 done 2026-09-05: audio, continuous MultiNet7 (no wake word), word → card → chime loop, dimming, silent tap-to-wake. Live adult speech 5/5 and the chime confirmed by a person. M3 on the child, the SD/photo path and a tap remain |
 
 ## ESP-IDF Environment
 
@@ -244,6 +244,14 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
 - **PSRAM is 8 MB octal** — full framebuffers and LVGL buffers belong there.
   368×448×2 bytes = 330 KB per full-screen RGB565 buffer, which does not fit comfortably
   in internal RAM.
+- **Unplugging USB is not a power cycle.** On 2026-09-05 the board wedged right after a
+  flash's post-write reset: screen black, no console bytes, and the ROM would not answer
+  esptool — while macOS still showed the USB-JTAG device enumerated with an *unchanged*
+  session ID after the cable was pulled and replaced. The AXP2101 kept the system up
+  (consistent with a battery on the MX1.25 header). **A long press on PWR (~8–10 s)
+  cut power; a short press brought it back** and everything was normal. Cause of the
+  wedge unknown; it has happened once. If the board goes silent, do this before
+  suspecting firmware.
 - **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
   backup before any flash that you cannot otherwise undo.
 
@@ -326,10 +334,9 @@ Honest list, so nobody builds on an assumption:
   and carries the running total in its heartbeat. Use the **stty/dd** attach from the
   `serial-capture` skill, not the pyserial script — a pyserial open resets the board and
   zeroes the counter, which is what defeated the first two attempts.
-- **Audio, partly.** `02_word_book_en` M0 opens both codec directions at 16 kHz mono,
-  records 3 s (ambient at −43 dBFS peak — the mic is live) and plays it back with the
-  right timing. Not yet witnessed by a person: speech-level capture, audible playback.
-  Speaker volume 90 (vendor's V2 value) and mic gain 30 dB are starting points.
+- **Audio: verified end to end.** Mic → ESP-SR recognises live adult speech (five for
+  five, `02_word_book_en`), speaker chime heard by a person. Mic gain 30 dB and volume 90
+  are the working values.
 - **microSD** — no card has been in the slot. `bsp_sdcard_mount()` fails cleanly without
   one (`sdmmc_init_ocr ... 0x107`, ~27–50 ms). `02_word_book_en` has the full read path
   written plus hot-insert, removal-while-running and a live vocabulary swap, all

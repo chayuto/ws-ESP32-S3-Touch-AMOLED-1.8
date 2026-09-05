@@ -10,7 +10,7 @@ Built in milestones, each verified on hardware before the next.
 | **M0** | Mic → PSRAM → speaker at 16 kHz mono | **done 2026-09-05** |
 | **M1** | MultiNet7 recognises words, no wake word | **done 2026-09-05** |
 | **M2** | `words.json` + photos on SD; word → card + chime + prompt | **done 2026-09-05** — see below; SD path awaits a card |
-| M3 | The child uses it; tune on the real voice | needs the child |
+| M3 | The child uses it; tune on the real voice | **adult voice verified 2026-09-05** (see below); the child is next |
 | **M4** | Idle screen, dimming, silent tap to wake, make it a toy | **done 2026-09-05** — dim verified; tap needs a finger |
 
 ## Build, flash, watch
@@ -21,6 +21,28 @@ idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en build
 idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en -p /dev/cu.usbmodem3101 flash
 ~/.espressif/python_env/idf5.5_py3.14_env/bin/python .claude/skills/serial-capture/scripts/capture.py --seconds 16
 ```
+
+## M3 — real voices
+
+First live test, an adult at arm's length, ten-word built-in vocabulary, floor at 15 %:
+
+```
+I (40461) recog: detected [1/1] id=0 'DOG' prob=0.156  (vad=1 vol=-56.8 dBFS, frame 1217)
+I (44083) recog: detected [1/1] id=1 'CAT' prob=0.365  (vad=1 vol=-57.1 dBFS, frame 1330)
+I (45770) recog: detected [1/1] id=2 'BALL' prob=0.528  (vad=1 vol=-57.0 dBFS, frame 1383)
+I (48088) recog: detected [1/1] id=7 'BOOK' prob=0.508  (vad=1 vol=-57.2 dBFS, frame 1455)
+I (49835) recog: detected [1/1] id=9 'APPLE' prob=0.211  (vad=1 vol=-56.6 dBFS, frame 1510)
+```
+
+Five for five, but look at the numbers: real speech scores well below the synthesised
+clips, and DOG and APPLE sit *under* the 0.20 floor the self-test had settled on. The
+floor is now `CONFIG_WORDBOOK_MIN_PROB_PCT`, default 15, and for a toddler it will
+likely need to go lower still — the hard limit is 14, above the 13.5 % junk that
+digital silence produces. Two other guards landed with it: one card per second, so a
+word's tail cannot fire a second card, and a 300 ms hold after playback so the mic does
+not hear the chime's DMA tail.
+
+Speaker confirmed audible by a person on the same day.
 
 ## M4 — making it a toy
 
@@ -113,7 +135,7 @@ stays at 181 KB.
   and the fallback runs; a card with `tools/make_book.py --demo` output is the test. Insert
   it while the board is running — that exercises hot-insert and the live vocabulary swap
   at the same time.
-- **Audible chime and prompt.** The DAC accepts them; nobody has heard the speaker.
+- **Prompt playback from a file** — needs a card. The chime itself has been heard.
 
 Two quirks worth knowing: the BSP warns *Long filenames on SD card are disabled* on every
 boot because it tests `CONFIG_FATFS_LONG_FILENAMES`, which is a Kconfig choice name, not

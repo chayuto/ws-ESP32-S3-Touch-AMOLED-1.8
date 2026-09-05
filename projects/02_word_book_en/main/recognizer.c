@@ -29,6 +29,7 @@
 #include "esp_timer.h"
 #include "freertos/task.h"
 #include "model_path.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "recog";
 
@@ -44,7 +45,7 @@ static const char *TAG = "recog";
  * a probability floor alone would throw away good detections. Keep MIN_PROB low
  * (generosity is the design goal) and let VAD reject the silence junk.
  */
-#define MIN_PROB        0.20f
+#define MIN_PROB        (CONFIG_WORDBOOK_MIN_PROB_PCT / 100.0f)
 
 static const esp_afe_sr_iface_t *s_afe;
 static esp_afe_sr_data_t *s_afe_data;

@@ -273,10 +273,17 @@ void app_main(void)
     cards_status(status);
 
     TickType_t last_beat = xTaskGetTickCount();
+    TickType_t last_word_tick = 0;
     for (;;) {
         word_event_t ev;
         if (xQueueReceive(s_events, &ev, pdMS_TO_TICKS(250)) == pdTRUE) {
-            on_word(&ev);
+            /* One utterance, one card: the engine can fire twice on a word's tail. */
+            if (last_word_tick && xTaskGetTickCount() - last_word_tick < pdMS_TO_TICKS(1000)) {
+                ESP_LOGI(TAG, "ignored '%s' %.0f%%: within 1 s of the last word", ev.text, ev.prob * 100);
+            } else {
+                on_word(&ev);
+                last_word_tick = xTaskGetTickCount();
+            }
             xQueueReset(s_events); /* anything heard while the chime played was us */
         }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {

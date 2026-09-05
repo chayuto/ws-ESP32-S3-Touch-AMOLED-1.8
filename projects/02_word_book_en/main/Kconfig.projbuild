@@ -9,6 +9,16 @@ menu "Word book"
             engine over serial with nobody present. Turn off for the toy build;
             it costs about 15 seconds and three chimes on every boot.
 
+    config WORDBOOK_MIN_PROB_PCT
+        int "Minimum recogniser confidence (%)"
+        range 1 99
+        default 15
+        help
+            Detections below this are ignored. Digital silence produces a fixed
+            junk detection at 13.5%, so do not go below 14. A larger vocabulary
+            spreads confidence thinner: with 8 words a synthesised "dog" scored
+            72%, with 10 words 18%. Tune on the child, generously.
+
     config WORDBOOK_VOLUME
         int "Speaker volume (0-100)"
         range 0 100

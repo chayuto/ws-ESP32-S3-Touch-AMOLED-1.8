@@ -14,6 +14,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "recognizer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "player";
 
@@ -43,6 +45,13 @@ static void write_samples(const int16_t *samples, size_t count)
     }
 }
 
+/* write() returns before the I2S DMA has finished playing; the mic hears that tail. */
+static void settle_then_resume(void)
+{
+    vTaskDelay(pdMS_TO_TICKS(300));
+    recognizer_resume();
+}
+
 static size_t tone(int16_t *out, float hz, int ms, float amp)
 {
     size_t n = (size_t)AUDIO_SAMPLE_RATE_HZ * ms / 1000;
@@ -69,7 +78,7 @@ void player_chime(void)
     }
     recognizer_pause();
     write_samples(buf, len);
-    recognizer_resume();
+    settle_then_resume();
 }
 
 esp_err_t player_wav(const char *path)
@@ -133,7 +142,7 @@ esp_err_t player_wav(const char *path)
         write_samples(buf, got / sizeof(int16_t));
         left -= got;
     }
-    recognizer_resume();
+    settle_then_resume();
     free(buf);
     fclose(f);
     ESP_LOGI(TAG, "played %s (%u samples)", path, (unsigned)(data_len / 2));
