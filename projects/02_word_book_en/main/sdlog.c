@@ -14,6 +14,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdcard.h"
+#include "timesync.h"
 
 static const char *TAG = "sdlog";
 
@@ -150,9 +151,10 @@ esp_err_t sdlog_open(const char *path)
     }
     strlcpy(s_path, path, sizeof(s_path));
     const esp_app_desc_t *app = esp_app_get_description();
-    fprintf(f, "\n===== boot: %s %s (IDF %s), reset reason %d, uptime %lld ms, ring dropped %u =====\n",
+    char now[32];
+    fprintf(f, "\n===== boot: %s %s (IDF %s), reset reason %d, uptime %lld ms, time %s, ring dropped %u =====\n",
             app->project_name, app->version, app->idf_ver, (int)esp_reset_reason(),
-            (long long)(esp_timer_get_time() / 1000), (unsigned)s_dropped);
+            (long long)(esp_timer_get_time() / 1000), timesync_now_str(now, sizeof(now)), (unsigned)s_dropped);
     s_file = f;
     xSemaphoreGive(s_file_mutex);
     ESP_LOGI(TAG, "appending to %s", path);

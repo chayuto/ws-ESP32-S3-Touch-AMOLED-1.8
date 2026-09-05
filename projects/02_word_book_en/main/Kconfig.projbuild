@@ -54,6 +54,41 @@ menu "Word book"
             recogniser is paused. Press BOOT to wake. BOOT also puts it to
             sleep at any time.
 
+    config WORDBOOK_TZ
+        string "Time zone (POSIX TZ string)"
+        default "AEST-10AEDT,M10.1.0,M4.1.0/3"
+        help
+            Used for timestamps in the log file. Default is Sydney.
+
+    config WORDBOOK_NTP
+        bool "Sync the clock from NTP over Wi-Fi at boot when a network is configured"
+        default y
+        help
+            Joins WORDBOOK_WIFI_SSID as a station, fetches the time, writes it to
+            the RTC, then turns Wi-Fi off. Skipped silently when the SSID is empty.
+            Put the real SSID and password in sdkconfig.defaults.local, never here.
+
+    config WORDBOOK_WIFI_SSID
+        string "Home Wi-Fi network for NTP"
+        depends on WORDBOOK_NTP
+        default ""
+
+    config WORDBOOK_WIFI_PASSWORD
+        string "Home Wi-Fi password"
+        depends on WORDBOOK_NTP
+        default ""
+
+    config WORDBOOK_NTP_SERVER
+        string "NTP server"
+        depends on WORDBOOK_NTP
+        default "pool.ntp.org"
+
+    config WORDBOOK_NTP_TIMEOUT_S
+        int "Seconds to wait for Wi-Fi before giving up"
+        depends on WORDBOOK_NTP
+        range 3 60
+        default 15
+
     config WORDBOOK_DIM_AFTER_S
         int "Seconds of quiet before dimming"
         range 5 3600

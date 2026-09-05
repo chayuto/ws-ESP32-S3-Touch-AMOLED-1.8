@@ -295,7 +295,9 @@ Anything else at `W` or above on a clean boot is worth reading.
 
 `sdkconfig.defaults` is **committed** and must contain no secrets. Real Wi-Fi or API
 credentials go in `projects/<name>/sdkconfig.defaults.local`, which is gitignored, and are
-layered in at build time:
+layered in at build time. (The home network's credentials are in the CAM sibling's
+gitignored `projects/cry-detect-01/sdkconfig.defaults` under `CONFIG_EXAMPLE_WIFI_*`;
+`02_word_book_en/sdkconfig.defaults.local` has them under `CONFIG_WORDBOOK_WIFI_*`.)
 
 ```zsh
 idf.py -C projects/<name> -B <build> \
@@ -355,11 +357,15 @@ Honest list, so nobody builds on an assumption:
   written plus hot-insert, removal-while-running and a live vocabulary swap, all
   untested; a card with `tools/make_book.py --demo` output, inserted while running,
   tests the lot. There is **no card-detect pin** — presence is polled.
-- **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
+- ~~RTC~~ — PCF85063 verified 2026-09-05 in `02_word_book_en`: set from NTP, read back
+  correctly on a later boot, keeps counting across reboots. CLKOUT is switched off at init.
+- ~~Wi-Fi (STA)~~ — joins the home network in ~7 s and NTP syncs (`02_word_book_en`).
+  Linking it costs ~55 KB of internal RAM even after `esp_wifi_deinit()` (166 → 110 KB
+  free), so it is brought up once at boot, before the recogniser, and torn down.
+- **IMU** — `WHO_AM_I` and address confirmed only; no readings taken.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
 - **Battery operation** — never run off the MX1.25 connector.
-- **Wi-Fi as an AP, end to end.** Tried in `02_word_book_en` on 2026-09-05: the driver
-  initialised and the AP started (`BOOT long press` → `wifi:` init lines), the phone side
-  did not work out, and the feature was removed the same day. Linking Wi-Fi cost 26 KB of
-  internal RAM and forced the LVGL buffer rule above. Untested past AP start.
+- **Wi-Fi as an AP.** Tried in `02_word_book_en` on 2026-09-05: the AP started, the
+  phone side did not work out, and the feature was removed the same day. STA mode works
+  (above).
 - **What the TCA9554 lines actually drive.**

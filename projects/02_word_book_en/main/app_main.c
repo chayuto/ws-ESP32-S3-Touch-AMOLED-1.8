@@ -32,6 +32,7 @@
 #include "recognizer.h"
 #include "sdcard.h"
 #include "sdlog.h"
+#include "timesync.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "wordbook";
@@ -331,6 +332,10 @@ void app_main(void)
         }
     }
 
+    /* Clock first, so the log file header and FAT timestamps carry real time. */
+    cards_status("setting the clock");
+    timesync_at_boot();
+
     /* Content: the card's book if there is one, built-in vocabulary if not. */
     if (sdcard_init()) {
         card_arrived(true);
@@ -411,9 +416,11 @@ void app_main(void)
         maybe_dim();
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {
             last_beat = xTaskGetTickCount();
-            ESP_LOGI(TAG, "alive: heard=%" PRIu32 " internal=%u psram=%u card=%d files=%d log=%d words=%u", s_heard,
-                     heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                     sdcard_present(), s_files_ok, sdlog_active(), (unsigned)s_book.count);
+            char now[32];
+            ESP_LOGI(TAG, "alive: %s heard=%" PRIu32 " internal=%u psram=%u card=%d files=%d log=%d words=%u",
+                     timesync_now_str(now, sizeof(now)), s_heard, heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     heap_caps_get_free_size(MALLOC_CAP_SPIRAM), sdcard_present(), s_files_ok, sdlog_active(),
+                     (unsigned)s_book.count);
         }
     }
 }

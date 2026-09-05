@@ -56,3 +56,7 @@ CONFIG_WORDBOOK_BOOT_SELFTEST=y
 # is no bounce buffer at all.
 CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=40
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=32768
+
+# Clock: RTC + optional NTP. Wi-Fi credentials never go here - see
+# sdkconfig.defaults.local (gitignored) and "Credential pattern" in CLAUDE.md.
+CONFIG_WORDBOOK_NTP=y

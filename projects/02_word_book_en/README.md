@@ -17,10 +17,14 @@ Built in milestones, each verified on hardware before the next.
 
 ```zsh
 . ~/esp/esp-idf/export.sh
-idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en build
-idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en -p /dev/cu.usbmodem3101 flash
-~/.espressif/python_env/idf5.5_py3.14_env/bin/python .claude/skills/serial-capture/scripts/capture.py --seconds 16
+idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en \
+  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local" build
+.claude/skills/flash/scripts/flash.sh 02_word_book_en      # watchdog reset, no DTR/RTS
+sleep 3; .claude/skills/serial-capture/scripts/attach.sh 30  # read without resetting
 ```
+
+(`sdkconfig.defaults.local` holds the Wi-Fi credentials for NTP; omit the `-D` and the
+board simply skips the sync.)
 
 ## M3 — real voices
 
@@ -143,6 +147,36 @@ appending.
 
 Read it on a laptop; `grep "mic:"` for the noise floor over a day, `grep heard` for what
 the child said, `grep rejected` for what nearly fired.
+
+### The clock
+
+Timestamps in the log come from the best source available at boot, in order:
+**NTP** over the home Wi-Fi → the board's **PCF85063 RTC** → the **firmware build time**.
+A successful NTP sync is written to the RTC, so after one good boot the board keeps
+real time across power cycles with no network. Wi-Fi is only up for the sync (~7 s) and
+is torn down afterwards; the recogniser never runs alongside it.
+
+Verified 2026-09-05: `clock set from NTP: 17:19:12` against the Mac's 17:19:08, `RTC
+updated`, and a later boot with no network reading the RTC. The RTC's 32 kHz CLKOUT pin
+is switched off at init — nothing uses it, and a square wave on the board is not a friend
+of the mic.
+
+Wi-Fi credentials live in `sdkconfig.defaults.local` (gitignored):
+
+```
+CONFIG_WORDBOOK_WIFI_SSID="..."
+CONFIG_WORDBOOK_WIFI_PASSWORD="..."
+```
+
+and the build layers it in:
+
+```zsh
+idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en \
+  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local" build
+```
+
+With no SSID, NTP is skipped silently and the RTC carries it. Time zone is
+`CONFIG_WORDBOOK_TZ` (default Sydney).
 
 ### Safe mode
 
@@ -301,6 +335,8 @@ main/recognizer.[ch]   ESP-SR AFE + MultiNet behind word_event_t — the module 
 main/book.[ch]         words.json → vocabulary; built-in fallback
 main/sdcard.[ch]       card presence: polled mount / status, no card-detect pin
 main/sdlog.[ch]        ESP_LOG mirror → /sdcard/02_word_book_en.log, append, 2 s sync
+main/pcf85063.[ch]     the RTC: read, set, CLKOUT off
+main/timesync.[ch]     NTP → RTC → build time, at boot
 main/button.[ch]       BOOT button (GPIO 0), polled: press = sleep / wake
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)
