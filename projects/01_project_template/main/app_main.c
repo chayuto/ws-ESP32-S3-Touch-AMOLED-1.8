@@ -86,15 +86,11 @@ void app_main(void)
     /* bsp_i2c_init() logs a pull-up warning on this board even though the
      * hardware pull-ups are fine and all six I2C devices enumerate. Mute it
      * across BSP bring-up so a real error is not lost in the noise. */
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0)
-    esp_log_level_t i2c_log_level = esp_log_level_get("i2c.master");
-    esp_log_level_set("i2c.master", ESP_LOG_NONE);
-#endif
+    /* Own tag at DEBUG from the first line (see .claude/skills/agentic-logging). The BSP's
+     * i2c.master pull-up warning during bring-up is benign here and stays visible on purpose. */
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
     /* Panel + touch + LVGL port, in one call. Draw buffers land in PSRAM. */
     lv_display_t *display = bsp_display_start();
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0)
-    esp_log_level_set("i2c.master", i2c_log_level);
-#endif
 
     if (display == NULL) {
         ESP_LOGE(TAG, "bsp_display_start() failed");
