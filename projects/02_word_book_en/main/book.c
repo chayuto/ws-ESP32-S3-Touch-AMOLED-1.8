@@ -17,7 +17,7 @@
 static const char *TAG = "book";
 
 /* What the board knows with no card in it. Text cards only. */
-static const char *const s_builtin[] = {"DOG", "CAT", "BALL", "MAMA", "DADA", "DUCK", "BABY", "CAR"};
+static const char *const s_builtin[] = {"DOG", "CAT", "BALL", "DUCK", "BABY", "CAR", "SHOE", "BOOK", "BIRD", "APPLE"};
 
 static void load_builtin(book_t *book)
 {
