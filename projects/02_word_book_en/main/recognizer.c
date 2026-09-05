@@ -228,11 +228,12 @@ static void detect_task(void *arg)
                 nc++;
             }
             clog_detection(cands, nc, speech, res->data_volume, verdict, frames);
-            if (valid) {
-                /* The engine's guess whatever the VAD thought: the boot self-test scores this,
-                 * because its synthetic clips are far quieter at the mic than a voice and the
-                 * neural VAD rightly ignores them. The VAD's own behaviour is measured by the
-                 * quiet-room records, not by the self-test. */
+            if (valid && (!s_raw_valid || r->prob[0] > s_raw.prob)) {
+                /* The best guess since the last take, whatever the VAD thought. The self-test
+                 * reads it after a clip's silent tail has fed, and the tail always produces a
+                 * junk detection at ~0.13 that used to overwrite the real one (DOG 0.66 at
+                 * 11.1 s, CAR 0.13 at 12.2 s, judge at 13.3 s). Best-of fixes that; the VAD's
+                 * own behaviour is measured by the quiet-room records, not here. */
                 s_raw.id = r->command_id[0];
                 s_raw.prob = r->prob[0];
                 s_raw.text = s_words[s_raw.id].text;
@@ -399,6 +400,7 @@ esp_err_t recognizer_inject(const int16_t *samples, size_t count, const char *la
     while (s_paused || s_flush) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
+    s_raw_valid = false; /* judge only what this clip produces */
     s_inject_pos = 0;
     s_inject_count = count;
     s_inject_label = label;
