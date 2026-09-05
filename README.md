@@ -80,7 +80,8 @@ I (710) app: UI drawn; tap the panel to see touch events here
 
 A toddler says a word; the board shows the matching photo and says it back. Offline
 speech recognition on ESP-SR MultiNet7, content as data on the SD card. Built in
-milestones — **M0 (mic → PSRAM → speaker at 16 kHz) verified 2026-09-05.** Design in
+milestones — **M0–M2 verified 2026-09-05:** audio, continuous recognition with no wake
+word, and the word → card → chime loop, all provable over serial with nobody present. Design in
 [`docs/design/02_word_book_en.md`](./docs/design/02_word_book_en.md).
 
 ## Repo layout

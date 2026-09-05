@@ -38,3 +38,10 @@ esp_err_t recognizer_inject(const int16_t *samples, size_t count, const char *la
 
 /* True while an injected clip is still being fed. */
 bool recognizer_injecting(void);
+
+/*
+ * Stop feeding the engine while the speaker is in use, so the board does not
+ * hear itself. The mic keeps being drained; resume flushes the AFE and MultiNet.
+ */
+void recognizer_pause(void);
+void recognizer_resume(void);

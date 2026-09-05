@@ -8,8 +8,8 @@ Built in milestones, each verified on hardware before the next.
 | | Milestone | Status |
 |---|---|---|
 | **M0** | Mic → PSRAM → speaker at 16 kHz mono | **done 2026-09-05** |
-| **M1** | MultiNet7 recognises words, no wake word | **done 2026-09-05** — see below |
-| M2 | `words.json` + photos on SD; word → card + chime + prompt | |
+| **M1** | MultiNet7 recognises words, no wake word | **done 2026-09-05** |
+| **M2** | `words.json` + photos on SD; word → card + chime + prompt | **done 2026-09-05** — see below; SD path awaits a card |
 | M3 | The child uses it; tune on the real voice | |
 | M4 | Idle screen, dimming, make it a toy | |
 
@@ -21,6 +21,74 @@ idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en build
 idf.py -C projects/02_word_book_en -B /tmp/ws-amoled-build/02_word_book_en -p /dev/cu.usbmodem3101 flash
 ~/.espressif/python_env/idf5.5_py3.14_env/bin/python .claude/skills/serial-capture/scripts/capture.py --seconds 16
 ```
+
+## M2 — the whole loop
+
+A word is heard → its card fills the screen → a chime → the recorded prompt if there is
+one. Content comes from the SD card; with no card the built-in starter vocabulary runs on
+text cards, so the loop is testable with nothing in the slot — which is how it was verified.
+
+### Putting a book on the SD card
+
+```zsh
+# from a folder of photos (dog.jpg, cat.png, mama.jpeg ...) and optional recordings (dog.m4a ...)
+python3 tools/make_book.py ~/Pictures/wordbook /Volumes/SDCARD/book
+
+# or three placeholder cards, to prove the SD path before any photos exist
+python3 tools/make_book.py --demo /Volumes/SDCARD/book
+```
+
+The filename stem is the word. The tool centre-crops photos to 368×448 and writes them as
+raw RGB565 (330 KB each, zero decode time on the board), resamples recordings to 16 kHz
+mono WAV, and writes `words.json`. Needs Pillow; uses `afconvert` for audio on macOS.
+
+`book/` layout on the card:
+
+```
+/sdcard/book/words.json
+/sdcard/book/dog.rgb565     368x448 RGB565 little-endian, no header
+/sdcard/book/dog.wav        16 kHz mono 16-bit — optional
+```
+
+A word with no photo shows as a large text card. A word with no prompt gets the chime
+only. Up to 32 words.
+
+### Verified output (2026-09-05, no card in the slot)
+
+```
+W (1087) wordbook: no SD card (ESP_ERR_TIMEOUT); text cards only
+I (1087) book: built-in vocabulary: 8 words, text cards only
+I (1724) recog: engine loaded: internal -22364 B (172203 free), psram -3101892 B (4462452 free)
+I (4787) recog: detected [1/1] id=0 'DOG' prob=0.718  (vad=1 vol=-69.0 dBFS, frame 98)
+I (6930) wordbook: self-test 1/3: clip 'dog' -> 'DOG' prob=0.718  [PASS]
+I (6930) wordbook: heard 'DOG' prob=0.718 -> text card
+I (9162) recog: detected [1/2] id=1 'CAT' prob=0.899  (vad=1 vol=-67.1 dBFS, frame 237)
+I (11428) wordbook: heard 'CAT' prob=0.899 -> text card
+I (13539) recog: detected [1/1] id=2 'BALL' prob=0.354  (vad=1 vol=-66.2 dBFS, frame 376)
+I (15806) wordbook: heard 'BALL' prob=0.354 -> text card
+I (16486) wordbook: self-test: 3/3 clips recognised
+I (26487) wordbook: alive: heard=3 internal=180991 psram=4430216
+```
+
+Each `heard` line is followed by the card and the chime; recognition is paused while the
+speaker is busy (the feed task sends silence instead of mic audio) and the model is
+flushed on resume — from the detect task itself, because calling `clean()` from another
+core mid-`detect()` corrupted the result list.
+
+Memory: two 330 KB photo buffers plus the chime bring PSRAM free to 4.43 MB; internal
+stays at 181 KB.
+
+### Not verified yet
+
+- **The SD path.** No card was available. `bsp_sdcard_mount()` fails cleanly without one
+  and the fallback runs; a card with `tools/make_book.py --demo` output is the test.
+- **Audible chime and prompt.** The DAC accepts them; nobody has heard the speaker.
+
+Two quirks worth knowing: the BSP warns *Long filenames on SD card are disabled* on every
+boot because it tests `CONFIG_FATFS_LONG_FILENAMES`, which is a Kconfig choice name, not
+a symbol — LFN *is* enabled here (`CONFIG_FATFS_LFN_HEAP=y`). And MultiNet7 sometimes
+returns a second result slot with an out-of-range command id at prob 0.99; only slot 0
+is ever used, and the recogniser drops any id it does not know.
 
 ## M1 — continuous recognition, no wake word
 
@@ -127,10 +195,14 @@ Tap the screen with someone talking, and both are answered in six seconds.
 ## Layout
 
 ```
-main/app_main.c        UI, self-test, event loop
+main/app_main.c        boot, SD mount, self-test, the word → card → sound loop
 main/audio_io.[ch]     I2S + ES8311 at 16 kHz mono (from M0)
 main/recognizer.[ch]   ESP-SR AFE + MultiNet behind word_event_t — the module project 3 replaces
+main/book.[ch]         words.json → vocabulary; built-in fallback
+main/cards.[ch]        full-screen photo / text cards (LVGL)
+main/player.[ch]       chime synth + WAV playback, pausing recognition meanwhile
 main/testclips/*.pcm   synthesised 16 kHz clips embedded for the boot self-test
+tools/make_book.py     host side: photos + recordings → SD card book folder
 partitions.csv         factory 4M / model 6M / storage 1M
 sdkconfig.defaults     board baseline + CONFIG_SR_MN_EN_MULTINET7_QUANT + CONFIG_MODEL_IN_FLASH
 ```

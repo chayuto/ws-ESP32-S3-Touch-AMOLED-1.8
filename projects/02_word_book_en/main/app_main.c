@@ -1,33 +1,35 @@
 /*
- * 02_word_book_en — M1: continuous recognition, no wake word.
+ * 02_word_book_en — M2: the whole loop.
  *
- * Boots the display, brings the codec up at 16 kHz, starts the ESP-SR pipeline
- * on core 1, then runs a self-test: three synthesised clips ("dog", "cat",
- * "ball") are fed through the recogniser as if the mic had heard them. That
- * proves the engine without anyone in the room. After that it listens live and
- * shows every word it hears.
+ * SD card -> words.json -> vocabulary. A word is heard -> its photo (or a text
+ * card) fills the screen, a chime plays, and if the book has a recorded prompt
+ * for it, that plays too. With no card in the slot the built-in starter
+ * vocabulary runs on text cards, so the loop is testable without content.
+ *
+ * The boot self-test from M1 stays: three synthesised clips through the
+ * recogniser, so the engine is proven on every boot without anyone present.
  */
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "audio_io.h"
+#include "book.h"
 #include "bsp/esp-bsp.h"
+#include "cards.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "player.h"
 #include "recognizer.h"
 
 static const char *TAG = "wordbook";
 
-/* Starter vocabulary. Grows from words.json on the SD card in M2. */
-static const word_def_t s_words[] = {
-    {"DOG"}, {"CAT"}, {"BALL"}, {"MAMA"}, {"DADA"}, {"DUCK"}, {"BABY"}, {"CAR"},
-};
-#define WORD_COUNT (sizeof(s_words) / sizeof(s_words[0]))
+#define BOOK_DIR BSP_SD_MOUNT_POINT "/book"
 
 /* Self-test clips: macOS `say` at 16 kHz mono, padded with silence, raw PCM. */
 extern const uint8_t clip_dog_start[] asm("_binary_dog_pcm_start");
@@ -50,82 +52,49 @@ static const clip_t s_clips[] = {
 };
 #define CLIP_COUNT (sizeof(s_clips) / sizeof(s_clips[0]))
 
-static lv_obj_t *s_word_label;
-static lv_obj_t *s_sub_label;
-static lv_obj_t *s_log_label;
+static book_t s_book;
+static word_def_t s_defs[BOOK_MAX_WORDS];
 static QueueHandle_t s_events;
 static uint32_t s_heard;
 
-static void ui_show(const char *word, const char *sub)
+/* React to a word exactly as the child will see it. */
+static void on_word(const word_event_t *ev)
 {
-    if (bsp_display_lock(200)) {
-        lv_label_set_text(s_word_label, word);
-        lv_label_set_text(s_sub_label, sub);
-        bsp_display_unlock();
+    if (ev->id < 0 || (size_t)ev->id >= s_book.count) {
+        return;
+    }
+    const book_word_t *w = &s_book.words[ev->id];
+    s_heard++;
+    ESP_LOGI(TAG, "heard '%s' prob=%.3f -> %s card", w->text, ev->prob, w->photo[0] ? "photo" : "text");
+    cards_show_word(w, ev->prob, s_heard);
+    player_chime();
+    if (w->prompt[0]) {
+        player_wav(w->prompt);
     }
 }
 
-static void ui_log(const char *line)
-{
-    if (bsp_display_lock(200)) {
-        lv_label_set_text(s_log_label, line);
-        bsp_display_unlock();
-    }
-}
-
-static void build_ui(void)
-{
-    lv_obj_t *scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
-
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "word book  -  M1 listen");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(title, lv_color_hex(0x8899aa), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 28);
-
-    s_word_label = lv_label_create(scr);
-    lv_label_set_text(s_word_label, "...");
-    lv_obj_set_style_text_font(s_word_label, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_word_label, lv_color_white(), 0);
-    lv_obj_align(s_word_label, LV_ALIGN_CENTER, 0, -40);
-
-    s_sub_label = lv_label_create(scr);
-    lv_label_set_text(s_sub_label, "starting");
-    lv_obj_set_style_text_font(s_sub_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_sub_label, lv_color_hex(0xcccccc), 0);
-    lv_obj_align(s_sub_label, LV_ALIGN_CENTER, 0, 10);
-
-    s_log_label = lv_label_create(scr);
-    lv_label_set_text(s_log_label, "");
-    lv_obj_set_style_text_font(s_log_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_log_label, lv_color_hex(0x667788), 0);
-    lv_obj_set_style_text_align(s_log_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(s_log_label, LV_ALIGN_BOTTOM_MID, 0, -28);
-}
-
-/* Drain events for up to `wait_ms`; returns the most confident word heard or NULL. */
-static const char *wait_for_word(uint32_t wait_ms, float *prob)
+/* Drain events for up to `wait_ms`; returns the most confident one, or false. */
+static bool wait_for_word(uint32_t wait_ms, word_event_t *best)
 {
     word_event_t ev;
-    const char *best = NULL;
-    *prob = 0;
+    bool any = false;
+    best->prob = 0;
     TickType_t end = xTaskGetTickCount() + pdMS_TO_TICKS(wait_ms);
     while (xTaskGetTickCount() < end) {
         TickType_t left = end - xTaskGetTickCount();
-        if (xQueueReceive(s_events, &ev, left) == pdTRUE && ev.prob > *prob) {
-            best = ev.text;
-            *prob = ev.prob;
+        if (xQueueReceive(s_events, &ev, left) == pdTRUE && ev.prob > best->prob) {
+            *best = ev;
+            any = true;
         }
     }
-    return best;
+    return any;
 }
 
 static void self_test(void)
 {
     int pass = 0;
-    char line[96];
-    ui_show("self-test", "feeding synthesised clips");
+    char line[64];
+    cards_status("self-test: feeding synthesised clips");
 
     for (size_t i = 0; i < CLIP_COUNT; i++) {
         const clip_t *c = &s_clips[i];
@@ -135,26 +104,29 @@ static void self_test(void)
         while (recognizer_injecting()) {
             vTaskDelay(pdMS_TO_TICKS(50));
         }
-        float prob = 0;
-        const char *heard = wait_for_word(1500, &prob);
-        bool ok = heard != NULL && strcmp(heard, c->expect) == 0;
+        word_event_t ev;
+        bool got = wait_for_word(1500, &ev);
+        bool ok = got && strcmp(ev.text, c->expect) == 0;
         pass += ok;
-        ESP_LOGI(TAG, "self-test %u/%u: clip '%s' -> %s%s%s  [%s]", (unsigned)i + 1, (unsigned)CLIP_COUNT, c->label,
-                 heard ? "'" : "", heard ? heard : "nothing", heard ? "'" : "", ok ? "PASS" : "FAIL");
-        if (heard) {
-            ESP_LOGI(TAG, "           prob=%.3f expected '%s'", prob, c->expect);
+        ESP_LOGI(TAG, "self-test %u/%u: clip '%s' -> %s%s%s prob=%.3f  [%s]", (unsigned)i + 1, (unsigned)CLIP_COUNT,
+                 c->label, got ? "'" : "", got ? ev.text : "nothing", got ? "'" : "", got ? ev.prob : 0.0f,
+                 ok ? "PASS" : "FAIL");
+        if (got) {
+            on_word(&ev); /* show the card and play the chime, as a real hearing would */
+            vTaskDelay(pdMS_TO_TICKS(400)); /* let the pipeline settle after the pause */
         }
-        snprintf(line, sizeof(line), "clip %s -> %s", c->label, heard ? heard : "nothing");
-        ui_log(line);
+        snprintf(line, sizeof(line), "self-test %u/%u: %s -> %s", (unsigned)i + 1, (unsigned)CLIP_COUNT, c->label,
+                 got ? ev.text : "nothing");
+        cards_status(line);
     }
     ESP_LOGI(TAG, "self-test: %d/%u clips recognised", pass, (unsigned)CLIP_COUNT);
     snprintf(line, sizeof(line), "self-test %d/%u", pass, (unsigned)CLIP_COUNT);
-    ui_log(line);
+    cards_status(line);
 }
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "02_word_book_en M1 starting");
+    ESP_LOGI(TAG, "02_word_book_en M2 starting");
     s_events = xQueueCreate(8, sizeof(word_event_t));
 
     esp_log_level_set("i2c.master", ESP_LOG_ERROR);
@@ -164,34 +136,49 @@ void app_main(void)
     ESP_LOGI(TAG, "display up: %" PRId32 "x%" PRId32, lv_display_get_horizontal_resolution(disp),
              lv_display_get_vertical_resolution(disp));
     if (bsp_display_lock(1000)) {
-        build_ui();
+        cards_init();
         bsp_display_unlock();
+    }
+    cards_show_idle();
+    cards_status("starting");
+
+    /* Content: SD card if there is one, built-in vocabulary if not. */
+    esp_err_t sd = bsp_sdcard_mount();
+    if (sd == ESP_OK) {
+        ESP_LOGI(TAG, "SD card mounted at %s: %s, %llu MB", BSP_SD_MOUNT_POINT, bsp_sdcard->cid.name,
+                 ((uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size) / (1024 * 1024));
+    } else {
+        ESP_LOGW(TAG, "no SD card (%s); text cards only", esp_err_to_name(sd));
+    }
+    book_load(&s_book, BOOK_DIR);
+    for (size_t i = 0; i < s_book.count; i++) {
+        s_defs[i].text = s_book.words[i].text;
     }
 
     audio_io_t io = {0};
     if (audio_io_init(&io) != ESP_OK) {
-        ui_show("audio failed", "see serial");
+        cards_status("audio init failed - see serial");
         return;
     }
-    if (recognizer_start(io.mic, s_words, WORD_COUNT, s_events) != ESP_OK) {
-        ui_show("recogniser failed", "see serial");
+    player_init(io.spk);
+    if (recognizer_start(io.mic, s_defs, s_book.count, s_events) != ESP_OK) {
+        cards_status("recogniser failed - see serial");
         return;
     }
 
-    /* Let the AFE settle on room noise before the clips go in. */
     vTaskDelay(pdMS_TO_TICKS(1500));
     self_test();
 
-    ui_show("listening", "say a word");
-    uint32_t last_beat = xTaskGetTickCount();
+    char status[48];
+    snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_book.from_sd ? " from SD" : ", built-in");
+    cards_status(status);
+
+    TickType_t last_beat = xTaskGetTickCount();
     for (;;) {
         word_event_t ev;
         if (xQueueReceive(s_events, &ev, pdMS_TO_TICKS(1000)) == pdTRUE) {
-            s_heard++;
-            char sub[48];
-            snprintf(sub, sizeof(sub), "%.0f%%  (#%" PRIu32 ")", ev.prob * 100.0f, s_heard);
-            ui_show(ev.text, sub);
-            ESP_LOGI(TAG, "heard '%s' prob=%.3f", ev.text, ev.prob);
+            on_word(&ev);
+            xQueueReset(s_events); /* anything heard while the chime played was us */
         }
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {
             last_beat = xTaskGetTickCount();

@@ -63,6 +63,8 @@ static size_t s_inject_count;
 static size_t s_inject_pos;
 static const char *s_inject_label;
 static int64_t s_inject_started_us;
+static volatile bool s_paused;
+static volatile bool s_flush;   /* set on resume; detect_task performs the clean() itself */
 
 static void feed_task(void *arg)
 {
@@ -103,6 +105,11 @@ static void feed_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
+            if (s_paused) {
+                /* Speaker is busy: keep the AFE's clock running on silence rather than
+                 * starving it, which makes it complain about an empty ring buffer. */
+                memset(buf, 0, bytes);
+            }
         }
         s_afe->feed(s_afe_data, buf);
     }
@@ -122,28 +129,43 @@ static void detect_task(void *arg)
     for (;;) {
         afe_fetch_result_t *res = s_afe->fetch(s_afe_data);
         if (res == NULL || res->ret_value == ESP_FAIL) {
-            ESP_LOGW(TAG, "afe fetch failed");
+            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
         frames++;
+        if (s_flush) {
+            /* Resume after playback: forget whatever the model had half-heard. Done here,
+             * on the task that owns the model, never from another core. */
+            s_flush = false;
+            s_mn->clean(s_mn_data);
+        }
+        if (s_paused) {
+            continue; /* frames fed before the pause landed; drop them */
+        }
 
         esp_mn_state_t state = s_mn->detect(s_mn_data, res->data);
         if (state == ESP_MN_STATE_DETECTED) {
             esp_mn_results_t *r = s_mn->get_results(s_mn_data);
             for (int i = 0; i < r->num; i++) {
                 int id = r->command_id[i];
-                const char *text = (id >= 0 && (size_t)id < s_word_count) ? s_words[id].text : "?";
+                if (id < 0 || (size_t)id >= s_word_count) {
+                    /* Seen from MultiNet7: a second result slot holding an out-of-range id
+                     * at prob 0.99. Only slot 0 is ever acted on; this is just noise. */
+                    ESP_LOGD(TAG, "detected [%d/%d] junk id=%d ignored", i + 1, r->num, id);
+                    continue;
+                }
                 ESP_LOGI(TAG, "detected [%d/%d] id=%d '%s' prob=%.3f  (vad=%d vol=%.1f dBFS, frame %" PRIu32 ")", i + 1,
-                         r->num, id, text, r->prob[i], (int)res->vad_state, res->data_volume, frames);
+                         r->num, id, s_words[id].text, r->prob[i], (int)res->vad_state, res->data_volume, frames);
             }
             bool speech = (res->vad_state == VAD_SPEECH);
-            if (r->num > 0 && speech && r->prob[0] >= MIN_PROB) {
+            bool valid = r->num > 0 && r->command_id[0] >= 0 && (size_t)r->command_id[0] < s_word_count;
+            if (valid && speech && r->prob[0] >= MIN_PROB) {
                 word_event_t ev = {.id = r->command_id[0], .prob = r->prob[0],
                                    .text = ((size_t)r->command_id[0] < s_word_count) ? s_words[r->command_id[0]].text : "?"};
                 if (xQueueSend(s_out, &ev, 0) != pdTRUE) {
                     ESP_LOGW(TAG, "event queue full, dropped '%s'", ev.text);
                 }
-            } else if (r->num > 0) {
+            } else if (valid) {
                 ESP_LOGI(TAG, "rejected: %s (prob %.3f, floor %.2f)", speech ? "low confidence" : "detected on silence",
                          r->prob[0], MIN_PROB);
             }
@@ -235,6 +257,9 @@ esp_err_t recognizer_inject(const int16_t *samples, size_t count, const char *la
     if (s_inject_samples != NULL) {
         return ESP_ERR_INVALID_STATE;
     }
+    while (s_paused || s_flush) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
     s_inject_pos = 0;
     s_inject_count = count;
     s_inject_label = label;
@@ -247,4 +272,15 @@ esp_err_t recognizer_inject(const int16_t *samples, size_t count, const char *la
 bool recognizer_injecting(void)
 {
     return s_inject_samples != NULL;
+}
+
+void recognizer_pause(void)
+{
+    s_paused = true;
+}
+
+void recognizer_resume(void)
+{
+    s_flush = true;
+    s_paused = false;
 }

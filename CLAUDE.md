@@ -115,7 +115,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 |---|---|---|
 | `bringup-01` | Chip report, I²C census, V1/V2 revision detection. No display. | yes — full output in its README |
 | `01_project_template` | The scaffold. BSP init, display, touch, LVGL 9 screen with a tap counter, heap heartbeat. | yes — display, touch registration, 240 MHz, stable heap |
-| `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0 audio loopback and M1 continuous MultiNet7 (no wake word, 3/3 self-test) done 2026-09-05 |
+| `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0–M2 done 2026-09-05: audio, continuous MultiNet7 (no wake word), word → card → chime loop. SD/photo path and audible output await a person and a card |
 
 ## ESP-IDF Environment
 
@@ -330,7 +330,9 @@ Honest list, so nobody builds on an assumption:
   records 3 s (ambient at −43 dBFS peak — the mic is live) and plays it back with the
   right timing. Not yet witnessed by a person: speech-level capture, audible playback.
   Speaker volume 90 (vendor's V2 value) and mic gain 30 dB are starting points.
-- **microSD** — no card mounted yet.
+- **microSD** — no card has been in the slot. `bsp_sdcard_mount()` fails cleanly without
+  one (`sdmmc_init_ocr ... 0x107`, ~50 ms). `02_word_book_en` has the full read path
+  written; a card with `tools/make_book.py --demo` output tests it.
 - **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
 - **Battery operation** — never run off the MX1.25 connector.
