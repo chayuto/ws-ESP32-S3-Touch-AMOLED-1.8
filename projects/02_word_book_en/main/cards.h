@@ -17,5 +17,8 @@ void cards_show_idle(void);
  */
 bool cards_show_word(const book_word_t *word, float confidence, unsigned nth);
 
+/* Setup-mode screen: the Wi-Fi details, large enough to read across a table. */
+void cards_show_setup(const char *text);
+
 /* One-line status at the bottom (self-test progress, card state). */
 void cards_status(const char *text);

@@ -32,6 +32,7 @@
 #include "recognizer.h"
 #include "sdcard.h"
 #include "sdlog.h"
+#include "webui.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "wordbook";
@@ -130,6 +131,43 @@ static void leave_sleep(void)
     wake_screen();
     recognizer_resume();
     ESP_LOGI(TAG, "awake: listening");
+}
+
+/* --- Setup mode: Wi-Fi + the drag-and-drop page. Long-press BOOT in and out. --- */
+
+static bool s_setup;
+
+static void enter_setup(void)
+{
+    if (s_setup) {
+        return;
+    }
+    leave_sleep();
+    recognizer_pause();
+    if (webui_start() != ESP_OK) {
+        cards_status("setup mode failed - see serial");
+        recognizer_resume();
+        return;
+    }
+    s_setup = true;
+    char line[96];
+    snprintf(line, sizeof(line), "Wi-Fi %s / %s\nhttp://192.168.4.1", CONFIG_WORDBOOK_WIFI_SSID, CONFIG_WORDBOOK_WIFI_PASSWORD);
+    cards_show_setup(line);
+    ESP_LOGI(TAG, "setup mode on");
+}
+
+static void leave_setup(void)
+{
+    if (!s_setup) {
+        return;
+    }
+    s_setup = false;
+    webui_stop();
+    recognizer_resume();
+    wake_screen();
+    cards_show_idle();
+    cards_status("listening");
+    ESP_LOGI(TAG, "setup mode off");
 }
 
 /* React to a word exactly as the child will see it. */
@@ -370,12 +408,30 @@ void app_main(void)
             }
             xQueueReset(s_events); /* anything heard while the chime played was us */
         }
-        if (button_pressed()) {
+        button_event_t bev = button_poll();
+        if (bev == BUTTON_LONG) {
+            if (s_setup) {
+                leave_setup();
+            } else {
+                enter_setup();
+            }
+        } else if (bev == BUTTON_SHORT && !s_setup) {
             if (s_asleep) {
                 leave_sleep();
             } else {
                 enter_sleep("button");
             }
+        }
+        if (s_setup) {
+            xQueueReset(s_events);
+            xSemaphoreTake(s_tap, 0);
+            if (webui_take_book_changed() && sdcard_present()) {
+                card_arrived(false); /* same path as a freshly inserted card */
+            }
+            if (sdcard_poll() && !sdcard_present()) {
+                card_left();
+            }
+            continue;
         }
         if (s_asleep) {
             xQueueReset(s_events);

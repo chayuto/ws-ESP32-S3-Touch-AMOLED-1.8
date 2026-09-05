@@ -192,6 +192,21 @@ bool cards_show_word(const book_word_t *word, float confidence, unsigned nth)
     return photo;
 }
 
+void cards_show_setup(const char *text)
+{
+    if (!bsp_display_lock(300)) {
+        return;
+    }
+    lv_obj_add_flag(s_photo, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x0f3d5c), 0);
+    lv_label_set_text(s_word, "setup");
+    lv_label_set_text(s_word_shadow, "setup");
+    lv_label_set_text(s_sub, text);
+    place_word(false);
+    lv_label_set_text(s_status, "hold BOOT to finish");
+    bsp_display_unlock();
+}
+
 void cards_status(const char *text)
 {
     if (bsp_display_lock(200)) {

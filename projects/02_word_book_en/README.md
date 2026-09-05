@@ -88,6 +88,34 @@ mono WAV, and writes `words.json`. Needs Pillow; uses `afconvert` for audio on m
 A word with no photo shows as a large text card. A word with no prompt gets the chime
 only. Up to 32 words.
 
+### Drag and drop: setup mode
+
+No card reader needed. **Hold BOOT for 1.5 s** and the board becomes a Wi-Fi network
+(`wordbook` / `wordbook1`, Kconfig) showing the details on screen. Join it from a phone or
+laptop and open **http://192.168.4.1**:
+
+- every word is a tile — **drop a photo on it** (or tap to pick one). The *browser* does
+  the centre-crop to 368×448 and packs RGB565, so iPhone HEIC, PNG, anything the browser
+  can show, just works; the board only writes 329,728 bytes to `book/<word>.rgb565` and
+  updates `words.json`.
+- **add a word** with the box at the top; it goes into the vocabulary immediately — the
+  recogniser swaps its word list live, no reboot.
+- ✕ removes a word from the book (its photo file stays on the card).
+
+Recognition is paused while in setup mode. Hold BOOT again to leave. Needs a card in the
+slot; without one the page says so and uploads are refused.
+
+Under the hood: `main/webui.c` — SoftAP + `esp_http_server`, five routes, manifest
+read-modify-write on the card, then a flag the main loop turns into the same reload path
+a freshly inserted card takes. `main/webui.html` is embedded in the app.
+
+### Starter photos
+
+`assets/photos/` holds ten Commons photographs for the built-in words, chosen by eye and
+validated through the pipeline (`assets/photos/CREDITS.md` has authors and licences).
+Either card them with `tools/make_book.py assets/photos /Volumes/<card>/book`, or drop
+them onto the tiles in setup mode.
+
 ### The card can come and go
 
 There is no card-detect line on this board, so `main/sdcard.c` polls: a mount attempt
@@ -155,6 +183,8 @@ stays at 181 KB.
 
 ### Not verified yet
 
+- **Setup mode end to end** — Wi-Fi AP up, page loads on a phone, a drop lands as a
+  card, an added word is recognised. Builds; the board was off the cable when written.
 - **The SD path.** No card was available. `bsp_sdcard_mount()` fails cleanly without one
   and the fallback runs; a card with `tools/make_book.py --demo` output is the test. Insert
   it while the board is running — that exercises hot-insert and the live vocabulary swap
@@ -278,7 +308,9 @@ main/recognizer.[ch]   ESP-SR AFE + MultiNet behind word_event_t — the module 
 main/book.[ch]         words.json → vocabulary; built-in fallback
 main/sdcard.[ch]       card presence: polled mount / status, no card-detect pin
 main/sdlog.[ch]        ESP_LOG mirror → /sdcard/02_word_book_en.log, append, 2 s sync
-main/button.[ch]       BOOT button (GPIO 0), polled: sleep / wake
+main/button.[ch]       BOOT button (GPIO 0), polled: short = sleep/wake, long = setup mode
+main/webui.[ch]+.html  setup mode: SoftAP + HTTP, drag-and-drop photos, add/remove words
+assets/photos/         starter photo set + CREDITS.md
 main/fonts/            lv_font_montserrat_72, generated with lv_font_conv
 main/cards.[ch]        full-screen photo / text cards (LVGL)
 main/player.[ch]       chime synth + WAV playback, pausing recognition meanwhile

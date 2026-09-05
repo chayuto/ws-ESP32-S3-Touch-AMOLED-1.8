@@ -54,6 +54,18 @@ menu "Word book"
             recogniser is paused. Press BOOT to wake. BOOT also puts it to
             sleep at any time.
 
+    config WORDBOOK_WIFI_SSID
+        string "Setup-mode Wi-Fi network name"
+        default "wordbook"
+        help
+            Hold BOOT for 1.5 s to start setup mode: the board becomes this
+            Wi-Fi network and serves the drag-and-drop page at
+            http://192.168.4.1. Hold BOOT again to leave.
+
+    config WORDBOOK_WIFI_PASSWORD
+        string "Setup-mode Wi-Fi password (8+ chars, or empty for open)"
+        default "wordbook1"
+
     config WORDBOOK_DIM_AFTER_S
         int "Seconds of quiet before dimming"
         range 5 3600

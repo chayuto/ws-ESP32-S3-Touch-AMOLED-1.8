@@ -9,11 +9,15 @@
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
-#define BUTTON_GPIO GPIO_NUM_0
+#define BUTTON_GPIO   GPIO_NUM_0
+#define LONG_PRESS_US (1500 * 1000)
 
 static const char *TAG = "button";
 static bool s_was_down;
+static int64_t s_down_since;
+static bool s_long_fired;
 
 void button_init(void)
 {
@@ -23,10 +27,20 @@ void button_init(void)
     ESP_LOGI(TAG, "BOOT button on GPIO %d, polled; level now %d", BUTTON_GPIO, gpio_get_level(BUTTON_GPIO));
 }
 
-bool button_pressed(void)
+button_event_t button_poll(void)
 {
     bool down = gpio_get_level(BUTTON_GPIO) == 0;
-    bool edge = down && !s_was_down;
+    button_event_t ev = BUTTON_NONE;
+    int64_t now = esp_timer_get_time();
+    if (down && !s_was_down) {
+        s_down_since = now;
+        s_long_fired = false;
+    } else if (down && !s_long_fired && now - s_down_since >= LONG_PRESS_US) {
+        s_long_fired = true;
+        ev = BUTTON_LONG;
+    } else if (!down && s_was_down && !s_long_fired) {
+        ev = BUTTON_SHORT;
+    }
     s_was_down = down;
-    return edge;
+    return ev;
 }

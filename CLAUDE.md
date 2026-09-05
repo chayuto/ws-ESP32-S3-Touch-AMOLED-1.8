@@ -352,4 +352,6 @@ Honest list, so nobody builds on an assumption:
 - **IMU / RTC** — `WHO_AM_I` and address confirmed only; no readings taken.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
 - **Battery operation** — never run off the MX1.25 connector.
+- **Wi-Fi.** `02_word_book_en` setup mode brings up a SoftAP + HTTP server; never run
+  on this unit yet. RAM headroom with the recogniser paused should be fine; measure.
 - **What the TCA9554 lines actually drive.**
