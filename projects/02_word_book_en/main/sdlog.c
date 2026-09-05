@@ -171,3 +171,8 @@ void sdlog_close(void)
     }
     xSemaphoreGive(s_file_mutex);
 }
+
+bool sdlog_active(void)
+{
+    return s_file != NULL;
+}

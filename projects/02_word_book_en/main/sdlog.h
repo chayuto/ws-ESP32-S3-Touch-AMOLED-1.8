@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 /*
@@ -17,3 +19,6 @@ esp_err_t sdlog_open(const char *path);
 
 /* The card went away (or is about to): close the file. Logging continues into the ring. */
 void sdlog_close(void);
+
+/* True while a log file is open on the card. */
+bool sdlog_active(void);

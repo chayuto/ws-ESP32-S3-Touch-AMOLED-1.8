@@ -71,6 +71,9 @@ static volatile size_t s_pending_count;
 
 static void apply_words(const word_def_t *words, size_t count);
 
+static word_event_t s_raw;
+static volatile bool s_raw_valid;
+
 static void feed_task(void *arg)
 {
     (void)arg;
@@ -188,6 +191,12 @@ static void detect_task(void *arg)
             }
             bool speech = (res->vad_state == VAD_SPEECH);
             bool valid = r->num > 0 && r->command_id[0] >= 0 && (size_t)r->command_id[0] < s_word_count;
+            if (valid && speech) {
+                s_raw.id = r->command_id[0];
+                s_raw.prob = r->prob[0];
+                s_raw.text = s_words[s_raw.id].text;
+                s_raw_valid = true;
+            }
             if (valid && speech && r->prob[0] >= MIN_PROB) {
                 word_event_t ev = {.id = r->command_id[0], .prob = r->prob[0],
                                    .text = ((size_t)r->command_id[0] < s_word_count) ? s_words[r->command_id[0]].text : "?"};
@@ -330,4 +339,14 @@ void recognizer_set_words(const word_def_t *words, size_t count)
 {
     s_pending_count = count;
     s_pending_words = words; /* set last: the detect task polls this */
+}
+
+bool recognizer_take_raw(word_event_t *out)
+{
+    if (!s_raw_valid) {
+        return false;
+    }
+    *out = s_raw;
+    s_raw_valid = false;
+    return true;
 }

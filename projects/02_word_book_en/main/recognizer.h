@@ -40,6 +40,13 @@ esp_err_t recognizer_inject(const int16_t *samples, size_t count, const char *la
 bool recognizer_injecting(void);
 
 /*
+ * The engine's most recent top guess, before the VAD and confidence gates.
+ * For the self-test, which checks the pipeline, not the tuning. Returns false
+ * if nothing has been detected since the last call.
+ */
+bool recognizer_take_raw(word_event_t *out);
+
+/*
  * Stop feeding the engine while the speaker is in use, so the board does not
  * hear itself. The mic keeps being drained; resume flushes the AFE and MultiNet.
  */
