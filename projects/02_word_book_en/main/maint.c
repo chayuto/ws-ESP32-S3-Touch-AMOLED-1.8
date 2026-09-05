@@ -125,6 +125,8 @@ static void drop_cache(const char *name)
     char path[112];
     snprintf(path, sizeof(path), "%s/%.*s.rgb565", BOOK_DIR, (int)(dot - name), name);
     unlink(path);
+    snprintf(path, sizeof(path), "%s/%.*s.fit.rgb565", BOOK_DIR, (int)(dot - name), name);
+    unlink(path);
 }
 
 /* ---- handlers ---- */

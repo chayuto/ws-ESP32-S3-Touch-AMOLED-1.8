@@ -96,6 +96,8 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 ├── docs/
 │   ├── research/             # lab notes and surveys (bringup-20260905.md is the founding one)
 │   └── internal/             # working notes (gitignored)
+├── components/
+│   └── amoled_photo/         # shared: JPEG/raw photo → 368×448 RGB565 card, scale-to-fit, cache
 ├── projects/
 │   ├── bringup-01/           # first-boot validation: chip report + I²C scan + revision detect
 │   └── 01_project_template/  # copy this to start anything: BSP + display + touch + LVGL
@@ -141,6 +143,17 @@ Verify a flash without reflashing:
 cd /tmp/ws-amoled-build/<name>
 esptool --chip esp32s3 -p /dev/cu.usbmodem3101 -b 921600 verify_flash @flash_args
 ```
+
+## Shared components (`components/`)
+
+Code more than one project wants lives here, not copied between projects. A project
+opts in with `set(EXTRA_COMPONENT_DIRS ../../components)` in its top `CMakeLists.txt`
+before `project.cmake`, then `REQUIRES <name>` in `main/CMakeLists.txt` or just
+`#include` (main depends on everything by default).
+
+| Component | What |
+|---|---|
+| `amoled_photo` | `photo_load()` / `photo_from_jpeg()`: JPEG or raw → 368×448 RGB565 card, scaled to fit with tinted bands, cached beside the JPEG. Host twin in `02_word_book_en/tools/make_book.py`. |
 
 ## Starting a New Project
 

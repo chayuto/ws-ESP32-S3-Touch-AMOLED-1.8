@@ -97,9 +97,10 @@ only. Up to 32 words.
 Make a folder called **`book`** at the root of the card and **drop JPEGs into it, named
 after the word**: `dog.jpg`, `cat.jpg`, `ice_cream.jpg` (underscore = space). The filename
 is the word; nothing else is needed. The board decodes the JPEG itself (≈220–370 ms for
-a 1 MP photo, a 12 MP iPhone shot is scaled 1/4 in the decoder first), centre-crops it to
-the screen and caches the result as `<word>.rgb565` beside it so the next showing is a
-plain read. Optional beside a photo: `dog.wav` (16 kHz mono) as the spoken prompt.
+a 1 MP photo, a 12 MP iPhone shot is scaled 1/4 in the decoder first), **scales it to fit**
+the screen — the whole photo stays visible; a landscape shot gets bands above and below in
+its own darkened average colour — and caches the result as `<word>.fit.rgb565` beside it
+so the next showing is a plain read. Optional beside a photo: `dog.wav` (16 kHz mono) as the spoken prompt.
 
 ```
 SD card root
@@ -107,7 +108,7 @@ SD card root
     ├── dog.jpg
     ├── cat.jpg
     ├── dog.wav          ← optional prompt
-    ├── dog.rgb565       ← written by the board; ignore, or delete to force a re-decode
+    ├── dog.fit.rgb565   ← written by the board; ignore, or delete to force a re-decode
     └── words.json       ← optional: text-only words, or pointing a word at another file
 ```
 
@@ -386,7 +387,7 @@ main/sdcard.[ch]       card presence: polled mount / status, no card-detect pin
 main/sdlog.[ch]        ESP_LOG mirror → /sdcard/02_word_book_en.log, append, 2 s sync
 main/pcf85063.[ch]     the RTC: read, set, CLKOUT off
 main/timesync.[ch]     NTP → RTC → build time, at boot
-main/photo.[ch]        JPEG decode (esp_new_jpeg) + centre-crop/box-filter to 368×448 + card cache
+(components/amoled_photo)  JPEG decode + scale-to-fit + card cache — shared, see components/
 main/wifi_sta.[ch]     join / leave the home network (NTP and maintenance share it)
 main/maint.[ch]+.html  maintenance mode: HTTP API + page
 main/devcmd.[ch]       single-letter serial commands

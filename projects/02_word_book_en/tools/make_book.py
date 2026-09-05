@@ -16,7 +16,7 @@ Output, in the layout the firmware reads:
       dog.wav         16 kHz, mono, 16-bit PCM
       ...
 
-Photos are centre-cropped to 368x448 (portrait). Recordings are resampled with
+Photos are scaled to fit 368x448 with tinted bands, exactly as the board does it. Recordings are resampled with
 macOS afconvert if present, otherwise must already be 16 kHz mono 16-bit WAV.
 
 --demo generates three placeholder cards (DOG, CAT, BALL) so the SD path can be
@@ -39,22 +39,22 @@ AUDIO_EXT = {".wav", ".m4a", ".aiff", ".aif", ".mp3", ".caf"}
 
 
 def to_rgb565(img: Image.Image) -> bytes:
-    """Centre-crop to 368x448 and pack as little-endian RGB565."""
-    src_ratio = img.width / img.height
-    dst_ratio = W / H
-    if src_ratio > dst_ratio:  # too wide: crop sides
-        new_w = int(img.height * dst_ratio)
-        left = (img.width - new_w) // 2
-        img = img.crop((left, 0, left + new_w, img.height))
-    else:  # too tall: crop top/bottom
-        new_h = int(img.width / dst_ratio)
-        top = (img.height - new_h) // 2
-        img = img.crop((0, top, img.width, top + new_h))
-    img = img.convert("RGB").resize((W, H), Image.LANCZOS)
+    """Scale to fit 368x448 with the whole photo visible, bands in the photo's own average
+    colour at 35% brightness, packed as little-endian RGB565. Same result as the board's
+    components/amoled_photo, so a pre-converted card and an on-device decode look alike."""
+    img = img.convert("RGB")
+    dw, dh = W, round(img.height * W / img.width)
+    if dh > H:
+        dh, dw = H, round(img.width * H / img.height)
+    inner = img.resize((dw, dh), Image.BOX)
+    r, g, b = (int(c * 0.35) for c in inner.resize((1, 1), Image.BOX).getpixel((0, 0)))
+    card = Image.new("RGB", (W, H), (r, g, b))
+    card.paste(inner, ((W - dw) // 2, (H - dh) // 2))
 
     out = bytearray(W * H * 2)
     i = 0
-    for r, g, b in img.get_flattened_data() if hasattr(img, 'get_flattened_data') else img.getdata():
+    px = card.get_flattened_data() if hasattr(card, "get_flattened_data") else card.getdata()
+    for r, g, b in px:
         v = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
         out[i] = v & 0xFF
         out[i + 1] = v >> 8

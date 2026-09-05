@@ -47,25 +47,29 @@ static uint8_t *read_all(const char *path, size_t *len)
 }
 
 /*
- * Fit src (sw x sh, RGB565) into dst (PHOTO_W x PHOTO_H): centre-crop to the
- * card's aspect, then average each destination pixel over its source box.
- * Integer arithmetic, one pass; a 1000x750 source takes ~40 ms.
+ * Scale src (sw x sh, RGB565) into dst (PHOTO_W x PHOTO_H) so the whole photo is
+ * visible: a landscape shot sits in the middle with bands above and below, a
+ * portrait one fills the card. The bands take the photo's own average colour,
+ * darkened, so they read as background rather than letterbox. Each destination
+ * pixel averages its source box; integer arithmetic, one pass.
  */
 static void fit(const uint16_t *src, int sw, int sh, uint16_t *dst)
 {
-    int cw = sw, ch = sh, cx = 0, cy = 0;
-    if (sw * PHOTO_H > sh * PHOTO_W) { /* too wide */
-        cw = sh * PHOTO_W / PHOTO_H;
-        cx = (sw - cw) / 2;
-    } else {
-        ch = sw * PHOTO_H / PHOTO_W;
-        cy = (sh - ch) / 2;
+    /* Inner rectangle: as wide as the card, or as tall, whichever fits. */
+    int dw = PHOTO_W, dh = (int)((int64_t)sh * PHOTO_W / sw);
+    if (dh > PHOTO_H) {
+        dh = PHOTO_H;
+        dw = (int)((int64_t)sw * PHOTO_H / sh);
     }
-    for (int y = 0; y < PHOTO_H; y++) {
-        int sy0 = cy + y * ch / PHOTO_H, sy1 = cy + (y + 1) * ch / PHOTO_H;
+    int ox = (PHOTO_W - dw) / 2, oy = (PHOTO_H - dh) / 2;
+
+    uint64_t tr = 0, tg = 0, tb = 0;
+    for (int y = 0; y < dh; y++) {
+        int sy0 = y * sh / dh, sy1 = (y + 1) * sh / dh;
         if (sy1 <= sy0) sy1 = sy0 + 1;
-        for (int x = 0; x < PHOTO_W; x++) {
-            int sx0 = cx + x * cw / PHOTO_W, sx1 = cx + (x + 1) * cw / PHOTO_W;
+        uint16_t *out = dst + (oy + y) * PHOTO_W + ox;
+        for (int x = 0; x < dw; x++) {
+            int sx0 = x * sw / dw, sx1 = (x + 1) * sw / dw;
             if (sx1 <= sx0) sx1 = sx0 + 1;
             uint32_t r = 0, g = 0, b = 0, n = 0;
             for (int sy = sy0; sy < sy1 && sy < sh; sy++) {
@@ -79,7 +83,21 @@ static void fit(const uint16_t *src, int sw, int sh, uint16_t *dst)
                 }
             }
             if (n == 0) n = 1;
-            dst[y * PHOTO_W + x] = (uint16_t)(((r / n) << 11) | ((g / n) << 5) | (b / n));
+            r /= n; g /= n; b /= n;
+            tr += r; tg += g; tb += b;
+            out[x] = (uint16_t)((r << 11) | (g << 5) | b);
+        }
+    }
+    /* Bands: average colour at 35% brightness. */
+    uint64_t cnt = (uint64_t)dw * dh;
+    uint16_t bg = (uint16_t)((((tr / cnt) * 35 / 100) << 11) | (((tg / cnt) * 35 / 100) << 5) | ((tb / cnt) * 35 / 100));
+    for (int y = 0; y < PHOTO_H; y++) {
+        uint16_t *row = dst + y * PHOTO_W;
+        if (y < oy || y >= oy + dh) {
+            for (int x = 0; x < PHOTO_W; x++) row[x] = bg;
+        } else {
+            for (int x = 0; x < ox; x++) row[x] = bg;
+            for (int x = ox + dw; x < PHOTO_W; x++) row[x] = bg;
         }
     }
 }
@@ -195,10 +213,15 @@ bool photo_load(const char *path, uint8_t *dst)
         return false;
     }
 
-    /* A cached conversion that is at least as new as the JPEG wins. */
-    char cache[112];
+    /* A cached conversion that is at least as new as the JPEG wins. Caches from the
+     * earlier crop-to-fill version were <stem>.rgb565; they are removed on sight. */
+    char cache[112], legacy[112];
     const char *dot = strrchr(path, '.');
-    snprintf(cache, sizeof(cache), "%.*s.rgb565", (int)(dot - path), path);
+    snprintf(cache, sizeof(cache), "%.*s.fit.rgb565", (int)(dot - path), path);
+    snprintf(legacy, sizeof(legacy), "%.*s.rgb565", (int)(dot - path), path);
+    if (unlink(legacy) == 0) {
+        ESP_LOGI(TAG, "removed old crop cache %s", legacy);
+    }
     struct stat sj, sc;
     if (stat(cache, &sc) == 0 && stat(path, &sj) == 0 && sc.st_mtime >= sj.st_mtime) {
         if (load_raw(cache, dst)) {
