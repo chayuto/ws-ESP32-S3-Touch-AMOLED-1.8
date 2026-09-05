@@ -18,6 +18,8 @@
 
 static const char *TAG = "cards";
 
+LV_FONT_DECLARE(lv_font_montserrat_72);
+
 #define CARD_W      368
 #define CARD_H      448
 #define CARD_BYTES  (CARD_W * CARD_H * 2)
@@ -76,21 +78,13 @@ void cards_init(cards_tap_cb_t on_tap)
 
     /* Word: a dark offset copy underneath makes it readable over any photo. */
     s_word_shadow = lv_label_create(scr);
-    lv_obj_set_style_text_font(s_word_shadow, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_font(s_word_shadow, &lv_font_montserrat_72, 0);
     lv_obj_set_style_text_color(s_word_shadow, lv_color_black(), 0);
     lv_obj_set_style_text_opa(s_word_shadow, LV_OPA_70, 0);
 
     s_word = lv_label_create(scr);
-    lv_obj_set_style_text_font(s_word, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_font(s_word, &lv_font_montserrat_72, 0);
     lv_obj_set_style_text_color(s_word, lv_color_white(), 0);
-
-    /* 48 px is the largest built-in Montserrat; scale both labels up 1.4x about their centre. */
-    for (int i = 0; i < 2; i++) {
-        lv_obj_t *l = i ? s_word : s_word_shadow;
-        lv_obj_set_style_transform_scale(l, 358, 0); /* 256 = 1.0 */
-        lv_obj_set_style_transform_pivot_x(l, lv_pct(50), 0);
-        lv_obj_set_style_transform_pivot_y(l, lv_pct(50), 0);
-    }
 
     s_sub = lv_label_create(scr);
     lv_obj_set_style_text_font(s_sub, &lv_font_montserrat_20, 0);

@@ -92,7 +92,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 ├── README.md                 # this file
 ├── .claude/
 │   ├── commands/             # /build /flash /monitor /hardware-specs /peripherals /restore-factory
-│   └── skills/               # new-project, serial-capture
+│   └── skills/               # new-project, serial-capture, flash
 ├── docs/
 │   ├── design/               # per-project design notes
 │   ├── research/             # lab notes and surveys

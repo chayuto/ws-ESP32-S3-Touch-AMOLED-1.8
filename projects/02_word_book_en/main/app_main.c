@@ -16,6 +16,7 @@
 
 #include "audio_io.h"
 #include "book.h"
+#include "button.h"
 #include "bsp/esp-bsp.h"
 #include "cards.h"
 #include "esp_heap_caps.h"
@@ -98,6 +99,33 @@ static void maybe_dim(void)
 static void on_tap(void)
 {
     xSemaphoreGive(s_tap);
+}
+
+/* --- Sleep: screen off, ears off. BOOT toggles it; quiet for long enough enters it. --- */
+
+static bool s_asleep;
+
+static void enter_sleep(const char *why)
+{
+    if (s_asleep) {
+        return;
+    }
+    s_asleep = true;
+    recognizer_pause();
+    bsp_display_brightness_set(0);
+    ESP_LOGI(TAG, "sleep (%s): screen off, not listening; press BOOT to wake", why);
+}
+
+static void leave_sleep(void)
+{
+    if (!s_asleep) {
+        return;
+    }
+    s_asleep = false;
+    s_dimmed = true; /* so wake_screen() restores full brightness */
+    wake_screen();
+    recognizer_resume();
+    ESP_LOGI(TAG, "awake: listening");
 }
 
 /* React to a word exactly as the child will see it. */
@@ -240,6 +268,7 @@ void app_main(void)
         cards_init(on_tap);
         bsp_display_unlock();
     }
+    button_init();
     cards_show_idle();
     cards_status("starting");
 
@@ -286,8 +315,24 @@ void app_main(void)
             }
             xQueueReset(s_events); /* anything heard while the chime played was us */
         }
+        if (button_pressed()) {
+            if (s_asleep) {
+                leave_sleep();
+            } else {
+                enter_sleep("button");
+            }
+        }
+        if (s_asleep) {
+            xQueueReset(s_events);
+            xSemaphoreTake(s_tap, 0);
+            continue; /* nothing else runs while asleep; the loop still turns for the button */
+        }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
             on_tap_main();
+        }
+        if (xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_SLEEP_AFTER_S * 60 * 1000)) {
+            enter_sleep("quiet");
+            continue;
         }
         if (sdcard_poll()) {
             if (sdcard_present()) {

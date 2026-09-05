@@ -6,7 +6,15 @@ lines yourself.
 
 Usage: `/monitor [seconds]` (default 14)
 
-The same recipe is packaged as a script — prefer it over retyping the inline python:
+**Prefer `attach.sh` (no reset) over anything here.** The pyserial recipe below resets
+the board on every open; use it only for the boot banner, never within ten seconds of a
+flash or another reset.
+
+```zsh
+.claude/skills/serial-capture/scripts/attach.sh 20
+```
+
+The reset-and-capture recipe is packaged as a script — prefer it over retyping the inline python:
 
 ```zsh
 ~/.espressif/python_env/idf5.5_py3.14_env/bin/python \

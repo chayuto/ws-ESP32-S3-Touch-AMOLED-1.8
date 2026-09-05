@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 """Capture serial console output from the ESP32-S3-Touch-AMOLED-1.8 on macOS.
 
+THIS RESETS THE BOARD. Every open() does. Use it only when you need the boot
+banner, never within ten seconds of a flash or another reset — the board has
+wedged after back-to-back resets and only a PWR long-press recovers it. For
+everything else use attach.sh next to this file, which does not reset.
+
 Run with the ESP-IDF venv python, which has pyserial:
     ~/.espressif/python_env/idf5.5_py3.14_env/bin/python capture.py --seconds 20
 

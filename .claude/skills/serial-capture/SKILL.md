@@ -5,6 +5,24 @@ description: Read the serial console of the ESP32-S3-Touch-AMOLED-1.8 board. Use
 
 # Serial capture
 
+## First rule: attaching is free, resetting is not
+
+`capture.py` **resets the board every time it opens the port** — there is no way around
+that with pyserial on macOS. `attach.sh` does not. The board wedged twice on 2026-09-05
+after a reset that followed another reset within seconds, and only a PWR long-press by a
+person at the desk brought it back. So:
+
+- Default to **`attach.sh`**. It shows everything the app prints from the moment you
+  attach: heartbeats, detections, self-tests, watchdog reports, panics.
+- Use `capture.py` only when you need the **boot banner** itself, and never within ten
+  seconds of a flash or another capture.
+- After flashing, wait three seconds, then `attach.sh`. Never `capture.py`.
+
+```zsh
+.claude/skills/serial-capture/scripts/attach.sh 20            # 20 s, prints to stdout
+.claude/skills/serial-capture/scripts/attach.sh 60 /tmp/x.log # longer, keep the file
+```
+
 ## The trap
 
 The board's console is the ESP32-S3's **native USB-Serial/JTAG** on GPIO 19/20, and it
@@ -39,7 +57,9 @@ capture therefore starts from a fresh boot and **wipes accumulated run state**: 
 uptime, anything the app has been keeping. If you need to observe a running app, use the
 next recipe instead.
 
-## Attach without resetting — the only way that actually works
+## Attach without resetting — `attach.sh`
+
+`attach.sh` is this, packaged:
 
 ```zsh
 stty -f /dev/cu.usbmodem3101 115200 -hupcl
@@ -52,9 +72,9 @@ pkill -f 'dd if=/dev/cu.usbmodem3101'; cat /tmp/tap.log
 Confirmed on hardware: timestamps continue from the running boot (`I (40712)` → `I (90712)`)
 instead of restarting at `I (454)`, so the app keeps its state.
 
-You see only output produced while attached — no boot banner. This is the recipe for
-anything involving live interaction: watching a heartbeat, catching a tap, confirming a
-counter advanced. Background it so you can interact with the board while it records.
+You see only output produced while attached — no boot banner. Use it for anything
+involving a live board or a person at it. Run it in the background (or `attach.sh` with
+a long duration) while they interact.
 
 ## Reading the result
 

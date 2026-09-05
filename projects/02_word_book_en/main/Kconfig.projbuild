@@ -36,6 +36,15 @@ menu "Word book"
         range 0 100
         default 12
 
+    config WORDBOOK_SLEEP_AFTER_S
+        int "Minutes of quiet before the screen turns off and listening stops"
+        range 1 1440
+        default 10
+        help
+            After this long with no word, the display goes fully off and the
+            recogniser is paused. Press BOOT to wake. BOOT also puts it to
+            sleep at any time.
+
     config WORDBOOK_DIM_AFTER_S
         int "Seconds of quiet before dimming"
         range 5 3600

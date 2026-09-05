@@ -91,7 +91,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 ├── README.md
 ├── .claude/
 │   ├── commands/             # /build /flash /monitor /hardware-specs /peripherals /restore-factory
-│   └── skills/               # new-project, serial-capture
+│   └── skills/               # new-project, serial-capture, flash
 ├── .gitignore                # excludes /ref/, build/, sdkconfig, managed_components/
 ├── docs/
 │   ├── research/             # lab notes and surveys (bringup-20260905.md is the founding one)
@@ -207,7 +207,8 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
 | Skill | Use it for |
 |---|---|
 | `new-project` | Scaffolding a new project from `01_project_template` with the verified board config |
-| `serial-capture` | Reading the console without dropping the board into download mode |
+| `serial-capture` | `attach.sh` reads the console without resetting; `capture.py` resets for a boot banner |
+| `flash` | Flashing with a watchdog reset instead of DTR/RTS, and what not to do afterwards |
 
 `.claude/commands/` holds the slash-command references: `/build`, `/flash`, `/monitor`,
 `/hardware-specs`, `/peripherals`, `/restore-factory`.
@@ -244,14 +245,17 @@ generated `sdkconfig`** first. Otherwise the change is silently ignored — this
 - **PSRAM is 8 MB octal** — full framebuffers and LVGL buffers belong there.
   368×448×2 bytes = 330 KB per full-screen RGB565 buffer, which does not fit comfortably
   in internal RAM.
-- **Unplugging USB is not a power cycle.** On 2026-09-05 the board wedged right after a
-  flash's post-write reset: screen black, no console bytes, and the ROM would not answer
-  esptool — while macOS still showed the USB-JTAG device enumerated with an *unchanged*
-  session ID after the cable was pulled and replaced. The AXP2101 kept the system up
-  (consistent with a battery on the MX1.25 header). **A long press on PWR (~8–10 s)
-  cut power; a short press brought it back** and everything was normal. Cause of the
-  wedge unknown; it has happened once. If the board goes silent, do this before
-  suspecting firmware.
+- **One reset at a time. Never two host-driven resets within ten seconds.** Twice on
+  2026-09-05 the board wedged — black screen, zero console bytes, ROM not answering
+  esptool, USB still enumerated — each time right after `idf.py flash`'s `hard_reset`
+  was followed within seconds by a pyserial open (which resets again through the
+  USB-Serial-JTAG DTR/RTS emulation). **Flash with the `flash` skill** (`--after
+  watchdog_reset`, no line toggling) **and look at the board with `attach.sh`**, which
+  does not reset. `capture.py` only for the boot banner, and only once.
+- **Unplugging USB is not a power cycle.** The AXP2101 keeps the system up (consistent
+  with a battery on the MX1.25 header; USB session ID was unchanged after a cable pull).
+  **Recovery from a wedge: hold PWR 8–10 s, release, press once.** That costs the person
+  at the desk a manual step every time — which is why the rule above exists.
 - **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
   backup before any flash that you cannot otherwise undo.
 

@@ -1,3 +1,13 @@
+# Flash
+
+**Use the `flash` skill:** `.claude/skills/flash/scripts/flash.sh <project>` after
+`idf.py build`. It flashes with `--after watchdog_reset` so the host never toggles the
+modem lines after writing. Then wait 3 s and `attach.sh` — do **not** run `capture.py`
+straight after a flash; that sequence wedged the board twice on 2026-09-05 and needs a
+PWR long-press to recover.
+
+---
+
 # Flash firmware to the connected ESP32-S3-Touch-AMOLED-1.8
 
 Usage: `/flash <project_path>` (same path used with `/build`)
