@@ -34,7 +34,7 @@ void devcmd_init(void)
         return;
     }
     xTaskCreatePinnedToCore(reader, "devcmd", 3072, NULL, 3, NULL, 0);
-    ESP_LOGI(TAG, "listening: m=maintenance r=reload s=sleep i=info d=debug-all p=power b=bright x=panel-reinit");
+    ESP_LOGI(TAG, "listening: m=maintenance r=reload s=sleep i=info d=debug-all p=power b=bright x=panel-reinit t=thermal-sim");
 }
 
 char devcmd_take(void)

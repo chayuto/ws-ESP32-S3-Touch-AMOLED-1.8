@@ -188,7 +188,8 @@ Single letters on the USB console, sent with
 `.claude/skills/serial-capture/scripts/send.sh <letter>` (holds the port open `-hupcl`
 around the byte; a bare `printf > /dev/cu.usbmodem3101` can lose it once the port has
 been closed and reopened): `m` maintenance, `s` sleep, `r` reload the card, `i` status
-line, `d` DEBUG on every tag.
+line, `d` DEBUG on every tag, `p` power and temperatures, `b` full brightness, `x` panel
+re-init, `t` step the thermal simulation.
 
 ### The card is also the flight recorder
 
@@ -234,12 +235,15 @@ every plug, unplug, sleep, wake and maintenance in/out:
 everything the board knows about itself on one line — USB and its voltage, battery
 present / mV / % / charge phase, system voltage, rail-enable registers, screen state and
 brightness, sleep and maintenance flags, heap current and minimum, PSRAM, card / files /
-log, word count, heard count with the last word and its confidence, mic level and speech
-percentage, uptime and real time. From the page: last 100, download, clear; API
-`GET /api/state[?tail=N]`, `DELETE /api/state`.
+log, word count, heard count with the last word and its confidence, the two die
+temperatures (`chip_c` the ESP32-S3, `pmu_c` the AXP2101; -999 = no reading) with the
+thermal level (`ok`, `warm`, `hot`, `trip`; see Temperature, below), mic level and speech
+percentage, uptime and real time. Thermal level changes are events too
+(`thermal_warm`, `thermal_hot`, `thermal_trip`, `thermal_ok`). From the page: last 100,
+download, clear; API `GET /api/state[?tail=N]`, `DELETE /api/state`.
 
 ```
-{"t":"state","time":"2026-09-06 09:40:06","up_s":6,"event":"boot","usb":1,"vbus_mv":5222,"battery":1,"vbat_mv":4114,"pct":100,"vsys_mv":4361,"charging":0,"chg":"done","dcdc_en":"0f","ldo_en":"ff01","screen":"on","brightness":85,"asleep":0,"maint":0,"internal":56603,"internal_min":19075,"psram":4137488,"card":1,"files":1,"log":1,"log_bytes":348323,"words":19,"heard":0,"last":"","last_p":0.00,"mic_avg":-63.6,"mic_peak":-52.0,"speech_pct":0}
+{"t":"state","time":"2026-09-06 14:24:07","up_s":147,"event":"periodic","usb":1,"vbus_mv":5209,"battery":1,"vbat_mv":4199,"pct":100,"vsys_mv":4419,"charging":1,"chg":"cv","dcdc_en":"0f","ldo_en":"ff01","screen":"on","brightness":85,"asleep":0,"maint":0,"internal":49175,"internal_min":13603,"psram":4136892,"card":1,"files":1,"log":1,"log_bytes":1566589,"words":20,"heard":3,"last":"BALL","last_p":0.67,"chip_c":35.7,"pmu_c":37.8,"thermal":"ok","mic_avg":-57.4,"mic_peak":-56.1,"speech_pct":0}
 ```
 
 A `boot` record follows the first state record of each run: the chip's reset reason,
@@ -249,9 +253,14 @@ which also reads `poweron`), and from the PMU why it last powered on and off
 (`pmu_on_src`: `pwr_key`, `vbus_insert`, `battery_insert`, ...; `pmu_off_src`:
 `pwr_key_held`, `vsys_undervoltage`, `software`, ..., or `none`; both hold their last
 cause across resets), plus the crash streak. "Did it lose power?" is then one line.
+Since the thermal guard: the die temperatures at boot, the charger as configured
+(`chg_ma` charge current, `chg_mv` target, `in_ma` input limit, `treg_c` the PMU's own
+thermal throttle line), how many thermal trips this board has ever made and the last one
+(`last_trip`: time, uptime and both dies at the moment it powered off, or `null`). A trip
+also shows as `pmu_off_src` `software` on the next boot.
 
 ```
-{"t":"boot","time":"2026-09-06 13:40:34","up_s":5,"reset":"poweron","rtc_ram":"lost","pmu_on":"04","pmu_on_src":"vbus_insert","pmu_off":"01","pmu_off_src":"pwr_key_held","crash_streak":0}
+{"t":"boot","time":"2026-09-06 14:21:45","up_s":5,"reset":"poweron","rtc_ram":"lost","pmu_on":"04","pmu_on_src":"vbus_insert","pmu_off":"01","pmu_off_src":"pwr_key_held","crash_streak":0,"chip_c":30.7,"pmu_c":34.8,"chg_ma":200,"chg_mv":4200,"in_ma":1500,"treg_c":60,"trips":0,"last_trip":null}
 ```
 
 Background: the screen was reported dark several times. Every case in the card log was
@@ -311,6 +320,44 @@ silence at full clock: 72 minutes asleep on battery took the gauge from 95 % to 
 same drain as in use. Asleep, a state record is written every
 `CONFIG_WORDBOOK_SLEEP_POWER_LOG_S` (300) seconds instead of every 30, and USB in/out is
 still recorded.
+
+### Temperature and the thermal guard
+
+A toy must never be too hot to hold. Two dies report their temperature once a second for
+three register reads: the ESP32-S3's own sensor (`chip_c`) and the AXP2101's (`pmu_c`);
+the charger is the biggest heater on the board and that die sits in it. Both go into
+every state record and `/api/metrics`, and the `i` and `p` serial lines. On USB at
+14:21 on 2026-09-06 (room about 22 °C) they read 30.7 °C and 34.8 °C at boot, and about
+36 °C and 38 °C after a few minutes listening at 85 % brightness while charging.
+
+The guard takes the hotter die as "the board" and acts in three steps (die °C, Kconfig):
+
+| Level | Default | What happens |
+|---|---|---|
+| warm | `CONFIG_WORDBOOK_THERMAL_WARM_C` 60 | Screen held at the dim level however often it is touched; status line "warm - screen dimmed to cool" |
+| hot | `CONFIG_WORDBOOK_THERMAL_HOT_C` 70 | Sleep (screen off, recogniser stopped), charger off, maintenance mode ended if on. BOOT shows a dim "too warm - cooling down, wait" for three seconds and does nothing else |
+| trip | `CONFIG_WORDBOOK_THERMAL_TRIP_C` 80 | Trip marker to NVS, `thermal_trip` record, three seconds for the card, then the PMU powers the whole board off. PWR or a USB insert brings it back; the boot record then names the trip |
+
+A level changes only after `CONFIG_WORDBOOK_THERMAL_SAMPLES` (5) consecutive seconds
+agree, and drops only `CONFIG_WORDBOOK_THERMAL_HYST_C` (5) below the line it crossed.
+Leaving hot turns the charger back on and leaves the board asleep, so BOOT wakes it like
+any other sleep. A board still at the trip line at boot goes straight back off. Readings
+outside -20..130 °C are ignored; if the dies disagree by more than 25 °C a warning names
+the suspect once, and the hotter still rules.
+
+Two things the PMU does by itself, set at every boot: its charge-current throttle
+(`CONFIG_WORDBOOK_PMU_TREG_C`, 60 °C die; the chip default was 100) works whether or
+not the firmware is running, and charging is switched back on if a trip left it off.
+The charger on this board as found: input limit 1500 mA, charge 200 mA to 4.20 V.
+
+Serial `t` steps a simulated board temperature through warm, hot and trip and back
+(a simulated trip is a dry run: logged, nothing written, nothing switched). Verified
+2026-09-06 14:23: warm dimmed, hot slept the board and switched the charger off, `s`
+while hot was ignored, the dry-run trip logged, cooling turned the charger back on and
+`s` then woke it. A real trip and the BOOT press while hot still need a hand and a hot
+board. **Calibration is owed**: the lines are die temperatures, and how much cooler the
+glass runs has not been measured; a thermometer on the glass after twenty minutes of
+charging at full brightness, against `pmu_c` in the records, sets the real lines.
 
 ### Numbers
 
@@ -493,6 +540,9 @@ Tap the screen with someone talking, and both are answered in six seconds.
 | `CONFIG_WORDBOOK_MIC_GAIN_DB` | 30 | Adult peaks at -12 dBFS, room at -52 (2026-09-06); a soft child may need 33-36 |
 | `CONFIG_WORDBOOK_LONG_PRESS_MS` | 1000 | 1.25 s holds meant as "long" fell under the old 1.5 s (2026-09-06) |
 | `CONFIG_WORDBOOK_SLEEP_POWER_LOG_S` | 300 | State record cadence asleep; 30 s awake |
+| `CONFIG_WORDBOOK_THERMAL_WARM_C` / `HOT_C` / `TRIP_C` | 60 / 70 / 80 | Die °C on the hotter die; provisional until the glass is measured against them (2026-09-06: 36 / 38 °C in normal use) |
+| `CONFIG_WORDBOOK_THERMAL_HYST_C`, `_SAMPLES` | 5, 5 | Levels need five agreeing seconds and drop 5 °C below the line |
+| `CONFIG_WORDBOOK_PMU_TREG_C` | 60 | The AXP2101 throttles its own charge current past this die temperature; chip default 100 |
 | Audio task | core 1, priority 5 | Away from LVGL on core 0; the recogniser will share this task |
 
 ## Layout
@@ -513,6 +563,7 @@ main/devcmd.[ch]       single-letter serial commands
 main/clog.[ch]         classifier + environment records (JSON Lines) → sdlog aux channel 0
 main/pmu.[ch]          AXP2101: rails, battery, USB; triggers the state record (sdlog aux channel 1)
 main/button.[ch]       BOOT button (GPIO 0), sampled every 10 ms, latched: short / long, hold time
+main/thermal.[ch]      both die temperatures once a second, the warm / hot / trip decision, the NVS trip marker
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)
 main/fonts/            lv_font_montserrat_72, generated with lv_font_conv

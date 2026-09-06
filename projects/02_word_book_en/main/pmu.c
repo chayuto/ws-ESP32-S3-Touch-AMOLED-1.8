@@ -1,5 +1,6 @@
 #include "pmu.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "bsp/esp-bsp.h"
@@ -7,6 +8,8 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "pmu";
@@ -14,6 +17,9 @@ static const char *TAG = "pmu";
 #define AXP2101_ADDR      0x34
 #define REG_STATUS1       0x00 /* bit5 VBUS good, bit3 battery present */
 #define REG_STATUS2       0x01 /* bits7:5 = 001 charging; bit3 = 1 means no VBUS; bits2:0 charge state */
+#define REG_COMMON_CFG    0x10 /* bit0 soft power-off (RWAC), bit1 restart */
+#define REG_IIN_LIMIT     0x16 /* bits2:0: 100/500/900/1000/1500/2000 mA */
+#define REG_CHG_GAUGE_WDT 0x18 /* bit1 cell battery charge enable, bit3 gauge enable */
 #define REG_CHIP_ID       0x03 /* 0x4a */
 #define REG_PWRON_STATUS  0x20 /* why the PMU last powered on; holds until the next power-on */
 #define REG_PWROFF_STATUS 0x21 /* why it last powered off; holds until the PMU itself loses power */
@@ -21,6 +27,10 @@ static const char *TAG = "pmu";
 #define REG_ADC_VBAT      0x34 /* H5L8 */
 #define REG_ADC_VBUS      0x38 /* H6L8 */
 #define REG_ADC_VSYS      0x3A /* H6L8 */
+#define REG_ADC_TDIE      0x3C /* H6L8; 22 + (7274 - raw) / 20 degC, the vendor library's formula */
+#define REG_ICC           0x62 /* bits4:0: 25*N mA for N<=8, 200+100*(N-8) above */
+#define REG_CV            0x64 /* bits2:0: 1=4.0 2=4.1 3=4.2 4=4.35 5=4.4 V */
+#define REG_TREG          0x65 /* bits1:0: charger thermal regulation at 60/80/100/120 C die */
 #define REG_DCDC_ENABLE   0x80 /* bit0..4 DCDC1..5 */
 #define REG_DCDC1_VOL     0x82 /* 1500 + 100*n */
 #define REG_LDO_ENABLE0   0x90 /* bit0 ALDO1 .. bit3 ALDO4, bit4 BLDO1, bit5 BLDO2, bit6 CPUSLDO, bit7 DLDO1 */
@@ -143,6 +153,27 @@ esp_err_t pmu_init(void)
     wr(REG_LDO_ENABLE0, ldo0 | 0x03);
     ESP_LOGI(TAG, "ALDO1 was %s, ALDO2 was %s; both now 3.3 V on", a1 ? "on" : "OFF", a2 ? "on" : "OFF");
 
+    /* Charging is the biggest heater on the board. The thermal guard may have switched it off
+     * before a power-off, and REG 18 survives that; it must not stay off for the next run. */
+    uint8_t chg = 0;
+    rd(REG_CHG_GAUGE_WDT, &chg);
+    if (!(chg & 0x02)) {
+        ESP_LOGW(TAG, "charger was OFF at boot (a thermal trip last run?); turning it back on");
+        wr(REG_CHG_GAUGE_WDT, chg | 0x02);
+    }
+    /* The PMU's own thermal throttle: it lowers the charge current itself once its die passes
+     * this line, firmware running or not. The chip default is 100 C; a toy should be gentler. */
+    uint8_t treg = 0;
+    rd(REG_TREG, &treg);
+    uint8_t want = CONFIG_WORDBOOK_PMU_TREG_C >= 120 ? 3 : CONFIG_WORDBOOK_PMU_TREG_C >= 100 ? 2 : CONFIG_WORDBOOK_PMU_TREG_C >= 80 ? 1 : 0;
+    if ((treg & 0x03) != want) {
+        ESP_LOGI(TAG, "charger thermal regulation %d C -> %d C", 60 + 20 * (treg & 0x03), 60 + 20 * want);
+        wr(REG_TREG, (treg & ~0x03) | want);
+    }
+    char chg_txt[120];
+    pmu_charger_text(chg_txt, sizeof(chg_txt));
+    ESP_LOGI(TAG, "charger: %s", chg_txt);
+
     pmu_status_t st;
     if (pmu_read(&st) == ESP_OK) {
         ESP_LOGI(TAG, "vbus %s (%u mV), battery %s (%u mV, %u%%), %s, vsys %u mV", st.vbus_in ? "in" : "OUT", st.vbus_mv,
@@ -234,4 +265,91 @@ void pmu_power_sources(uint8_t *on_bits, uint8_t *off_bits, char *on_txt, size_t
     if (off_bits) *off_bits = off;
     if (on_txt) bits_to_text(on, on_names, on_txt, on_n);
     if (off_txt) bits_to_text(off, off_names, off_txt, off_n);
+}
+
+float pmu_die_temp_c(void)
+{
+    uint8_t h = 0, l = 0;
+    if (!s_ready || rd(REG_ADC_TDIE, &h) != ESP_OK || rd(REG_ADC_TDIE + 1, &l) != ESP_OK) {
+        return NAN;
+    }
+    int raw = ((h & 0x3F) << 8) | l;
+    return 22.0f + (7274 - raw) / 20.0f;
+}
+
+esp_err_t pmu_set_charging(bool on)
+{
+    uint8_t v = 0;
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(rd(REG_CHG_GAUGE_WDT, &v), TAG, "reg 18");
+    bool was = v & 0x02;
+    if (was == on) {
+        return ESP_OK;
+    }
+    esp_err_t err = wr(REG_CHG_GAUGE_WDT, on ? (v | 0x02) : (v & ~0x02));
+    if (on) {
+        ESP_LOGI(TAG, "charger on (%s)", esp_err_to_name(err));
+    } else {
+        ESP_LOGW(TAG, "charger OFF (%s)", esp_err_to_name(err));
+    }
+    return err;
+}
+
+bool pmu_charging_enabled(void)
+{
+    uint8_t v = 0;
+    return s_ready && rd(REG_CHG_GAUGE_WDT, &v) == ESP_OK && (v & 0x02);
+}
+
+int pmu_input_limit_ma(void)
+{
+    static const int ma[8] = {100, 500, 900, 1000, 1500, 2000, -1, -1};
+    uint8_t v = 0;
+    return (s_ready && rd(REG_IIN_LIMIT, &v) == ESP_OK) ? ma[v & 0x07] : -1;
+}
+
+int pmu_charge_ma(void)
+{
+    uint8_t v = 0;
+    if (!s_ready || rd(REG_ICC, &v) != ESP_OK) {
+        return -1;
+    }
+    int n = v & 0x1F;
+    return n <= 8 ? 25 * n : 200 + 100 * (n - 8);
+}
+
+int pmu_charge_target_mv(void)
+{
+    static const int mv[8] = {-1, 4000, 4100, 4200, 4350, 4400, -1, -1};
+    uint8_t v = 0;
+    return (s_ready && rd(REG_CV, &v) == ESP_OK) ? mv[v & 0x07] : -1;
+}
+
+int pmu_thermal_reg_c(void)
+{
+    uint8_t v = 0;
+    return (s_ready && rd(REG_TREG, &v) == ESP_OK) ? 60 + 20 * (v & 0x03) : -1;
+}
+
+void pmu_charger_text(char *buf, size_t n)
+{
+    snprintf(buf, n, "input limit %d mA, charge %d mA to %d mV, PMU throttles charging above %d C die, charger %s",
+             pmu_input_limit_ma(), pmu_charge_ma(), pmu_charge_target_mv(), pmu_thermal_reg_c(),
+             pmu_charging_enabled() ? "on" : "OFF");
+}
+
+esp_err_t pmu_power_off(void)
+{
+    uint8_t v = 0;
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(rd(REG_COMMON_CFG, &v), TAG, "reg 10");
+    ESP_LOGE(TAG, "soft power-off: every rail goes down now; PWR or a USB insert brings the board back");
+    ESP_RETURN_ON_ERROR(wr(REG_COMMON_CFG, v | 0x01), TAG, "reg 10");
+    vTaskDelay(pdMS_TO_TICKS(2000)); /* the rails should be gone before this returns */
+    ESP_LOGE(TAG, "still running 2 s after the power-off write");
+    return ESP_FAIL;
 }

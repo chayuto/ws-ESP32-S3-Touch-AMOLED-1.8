@@ -163,4 +163,47 @@ menu "Word book"
         range 5 3600
         default 60
 
+    config WORDBOOK_THERMAL_WARM_C
+        int "Thermal guard: warm, die C (screen dims)"
+        range 30 120
+        default 60
+        help
+            The hotter of the chip die and the PMU die, read once a second. At warm the
+            screen is held at the dim level and the status line says so. Die
+            temperatures run well above the case; calibrate against a thermometer on
+            the glass before trusting the defaults for a child's hands.
+
+    config WORDBOOK_THERMAL_HOT_C
+        int "Thermal guard: hot, die C (sleep, charger off, BOOT ignored)"
+        range 30 125
+        default 70
+
+    config WORDBOOK_THERMAL_TRIP_C
+        int "Thermal guard: trip, die C (PMU powers the board off)"
+        range 30 130
+        default 80
+        help
+            The board writes a marker to NVS, records the trip on the card, waits
+            three seconds for the card, and powers itself off through the PMU. It comes
+            back on PWR or a USB insert, and the boot record names the trip.
+
+    config WORDBOOK_THERMAL_HYST_C
+        int "Thermal guard: degrees below a line before the level drops"
+        range 1 20
+        default 5
+
+    config WORDBOOK_THERMAL_SAMPLES
+        int "Thermal guard: consecutive seconds that must agree before the level changes"
+        range 1 60
+        default 5
+
+    config WORDBOOK_PMU_TREG_C
+        int "PMU charger thermal regulation, die C (60, 80, 100 or 120)"
+        range 60 120
+        default 60
+        help
+            The AXP2101 lowers its own charge current once its die passes this line,
+            whether or not the firmware is running. Chip default 100. Values between
+            the four steps round down.
+
 endmenu

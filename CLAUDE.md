@@ -318,6 +318,15 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
   board, and a "black screen, no response to any button" report was the user's own
   presses; the card records showed it, the board had never reset. BOOT now only wakes,
   and every press is acknowledged on the status line.
+- **The board watches its own temperature.** Both dies (ESP32-S3 sensor, AXP2101 REG 3C)
+  are read once a second by `02_word_book_en`'s `thermal.c`; the hotter one drives a
+  three-step guard (dim at 60 °C, sleep + charger off at 70, PMU soft power-off at 80,
+  die degrees, Kconfig). The PMU's own charge throttle is set to 60 °C at boot (REG 65,
+  chip default 100) so it works with the firmware wedged. Normal use reads about 36 /
+  38 °C on USB. The lines are provisional until someone puts a thermometer on the glass.
+  Anything that heats the board (a new rail, a charge-current change) must be checked
+  against `pmu_c` in the state records, and a real trip leaves `last_trip` in the boot
+  record and `pmu_off_src` `software`.
 - **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
   backup before any flash that you cannot otherwise undo.
 

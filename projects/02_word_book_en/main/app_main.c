@@ -11,6 +11,7 @@
  */
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -37,6 +38,7 @@
 #include "recognizer.h"
 #include "sdcard.h"
 #include "sdlog.h"
+#include "thermal.h"
 #include "timesync.h"
 #include "sdkconfig.h"
 
@@ -105,6 +107,15 @@ static int s_last_word = -1;
 static TickType_t s_last_activity;
 static SemaphoreHandle_t s_tap;
 
+/* The thermal guard's last sample; thermal_step() refreshes it every loop turn. */
+static thermal_status_t s_thermal;
+
+/* A reading that is not there prints as -999, which no die ever reads; "nan" is not JSON. */
+static float jnum(float v)
+{
+    return isnan(v) ? -999.0f : v;
+}
+
 /* --- Screen brightness: bright while in use, dim after a quiet spell -------- */
 
 static TickType_t s_woke_at;
@@ -114,6 +125,10 @@ static void wake_screen(void)
     s_last_activity = xTaskGetTickCount();
     s_woke_at = s_last_activity;
     if (s_dimmed) {
+        if (s_thermal.level >= THERMAL_WARM) {
+            bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS); /* warm: dim is the ceiling, however often it is touched */
+            return;
+        }
         s_dimmed = false;
         esp_err_t err = bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
         ESP_LOGI(TAG, "screen: bright (%d%%, write %s)", CONFIG_WORDBOOK_BRIGHTNESS, esp_err_to_name(err));
@@ -155,7 +170,7 @@ static void state_record(const char *event)
     int speech = 0;
     recognizer_mic_level(&mic_avg, &mic_peak, &speech);
     static const char *const chg_names[] = {"tri", "pre", "cc", "cv", "done", "idle", "?", "?"};
-    char now[32], buf[640];
+    char now[32], buf[768];
     snprintf(buf, sizeof(buf),
              "{\"t\":\"state\",\"time\":\"%s\",\"up_s\":%lld,\"event\":\"%s\","
              "\"usb\":%d,\"vbus_mv\":%u,\"battery\":%d,\"vbat_mv\":%u,\"pct\":%u,\"vsys_mv\":%u,\"charging\":%d,\"chg\":\"%s\","
@@ -164,6 +179,7 @@ static void state_record(const char *event)
              "\"internal\":%u,\"internal_min\":%u,\"psram\":%u,"
              "\"card\":%d,\"files\":%d,\"log\":%d,\"log_bytes\":%ld,"
              "\"words\":%u,\"heard\":%lu,\"last\":\"%s\",\"last_p\":%.2f,"
+             "\"chip_c\":%.1f,\"pmu_c\":%.1f,\"thermal\":\"%s\","
              "\"mic_avg\":%.1f,\"mic_peak\":%.1f,\"speech_pct\":%d}",
              timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000000), event,
              ps.vbus_in, ps.vbus_mv, ps.batt_present, ps.vbat_mv, ps.batt_pct, ps.vsys_mv, ps.charging, chg_names[ps.chg_state & 7],
@@ -174,7 +190,7 @@ static void state_record(const char *event)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              sdcard_present(), s_files_ok, sdlog_active(), sdlog_size(),
              (unsigned)s_book.count, (unsigned long)s_heard, s_last_word_text ? s_last_word_text : "", s_last_prob,
-             mic_avg, mic_peak, speech);
+             jnum(s_thermal.chip_c), jnum(s_thermal.pmu_c), thermal_level_name(s_thermal.level), mic_avg, mic_peak, speech);
     sdlog_aux_write(1, buf);
 }
 
@@ -333,6 +349,107 @@ static void normal_status(void)
     char status[48];
     snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_files_ok ? " from SD" : ", built-in");
     cards_status(status);
+}
+
+/* --- Thermal guard: the board must never be too hot for a child's hands. ---------------
+ * thermal.c reads both dies once a second and decides a level; this is what the app does
+ * about it. warm: the screen is held dim and the status line says so. hot: sleep (screen
+ * off, recogniser stopped), charger off, and BOOT only shows a dim "cooling down" note.
+ * trip: marker to NVS, record to the card, three seconds for the card, PMU soft power-off.
+ * Levels drop with hysteresis; leaving hot turns the charger back on and leaves the board
+ * asleep, so BOOT wakes it like any other sleep. Serial `t` simulates the levels; a
+ * simulated trip is a dry run. */
+
+static TickType_t s_hot_ack_until;
+static int64_t s_trip_failed_us;
+
+static void hot_ack(void)
+{
+    cards_status("too warm - cooling down, wait");
+    bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
+    s_hot_ack_until = xTaskGetTickCount() + pdMS_TO_TICKS(3000);
+    if (s_hot_ack_until == 0) {
+        s_hot_ack_until = 1;
+    }
+}
+
+static void thermal_trip_now(const thermal_status_t *st)
+{
+    ESP_LOGE(TAG, "THERMAL TRIP: chip %.1f C, PMU %.1f C, line %d C%s", st->chip_c, st->pmu_c, CONFIG_WORDBOOK_THERMAL_TRIP_C,
+             st->simulated ? " (SIMULATED: nothing written, nothing switched off)" : "");
+    if (st->simulated) {
+        return;
+    }
+    pmu_set_charging(false);
+    if (!s_asleep) {
+        enter_sleep("trip");
+    }
+    thermal_mark_trip(st);
+    state_record("thermal_trip");
+    vTaskDelay(pdMS_TO_TICKS(3000)); /* the drain task syncs the card every two seconds */
+    if (pmu_power_off() != ESP_OK) {
+        s_trip_failed_us = esp_timer_get_time();
+        ESP_LOGE(TAG, "the PMU did not power off; asleep with the charger off, trying again every minute");
+    }
+}
+
+static void thermal_step(void)
+{
+    thermal_status_t st;
+    bool changed = thermal_poll(&st);
+    thermal_level_t was = s_thermal.level;
+    s_thermal = st;
+    if (!changed) {
+        if (st.level == THERMAL_TRIP && !st.simulated && s_trip_failed_us &&
+            esp_timer_get_time() - s_trip_failed_us > 60 * 1000000LL) {
+            thermal_trip_now(&st);
+        }
+        return;
+    }
+    ESP_LOGW(TAG, "thermal: %s -> %s (chip %.1f C, PMU %.1f C%s)", thermal_level_name(was), thermal_level_name(st.level),
+             st.chip_c, st.pmu_c, st.simulated ? ", SIMULATED" : "");
+    if (st.level >= THERMAL_HOT && was < THERMAL_HOT) {
+        if (s_maint) {
+            leave_maint(); /* the radio is heat too */
+        }
+        pmu_set_charging(false);
+        if (!s_asleep) {
+            cards_status("too warm - cooling down");
+            enter_sleep("hot");
+        }
+    } else if (st.level < THERMAL_HOT && was >= THERMAL_HOT) {
+        pmu_set_charging(true); /* still asleep; BOOT wakes it as usual */
+    } else if (st.level == THERMAL_WARM && was == THERMAL_OK && !s_asleep && !s_maint) {
+        if (!s_dimmed) {
+            s_dimmed = true;
+            bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
+        }
+        cards_status("warm - screen dimmed to cool");
+    } else if (st.level == THERMAL_OK && was == THERMAL_WARM && !s_asleep && !s_maint) {
+        normal_status();
+    }
+    char event[24];
+    snprintf(event, sizeof(event), "thermal_%s", thermal_level_name(st.level));
+    state_record(event);
+    if (st.level == THERMAL_TRIP) {
+        thermal_trip_now(&st);
+    }
+}
+
+/* At boot, a board still hot from the last run goes straight back off, before the
+ * screen and the recogniser add to it. Two readings a second apart must both agree. */
+static void thermal_boot_check(void)
+{
+    thermal_status(&s_thermal);
+    if (isnan(s_thermal.board_c) || s_thermal.board_c < CONFIG_WORDBOOK_THERMAL_TRIP_C) {
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1100));
+    thermal_poll(&s_thermal);
+    if (s_thermal.board_c >= CONFIG_WORDBOOK_THERMAL_TRIP_C) {
+        ESP_LOGE(TAG, "%.1f C at boot", s_thermal.board_c);
+        thermal_trip_now(&s_thermal);
+    }
 }
 
 
@@ -580,12 +697,25 @@ static void boot_record(void)
     ESP_LOGI(TAG, "boot: chip reset %s, RTC RAM %s%s; PMU last powered on by %s, last powered off by %s; crash streak %" PRIu32,
              why, rtc, s_cold_boot ? " (no power, or a full reset like esptool's)" : " (warm reset, PMU stayed on)", on_txt,
              off_txt, s_panic_streak);
-    char now[32], buf[320];
+    /* The charger as configured, and the last thermal trip this board ever made. */
+    char chg_txt[120], trip_txt[160] = "null";
+    pmu_charger_text(chg_txt, sizeof(chg_txt));
+    thermal_trip_t trip = {0};
+    if (thermal_last_trip(&trip)) {
+        snprintf(trip_txt, sizeof(trip_txt), "{\"when\":%lld,\"up_s\":%" PRIu32 ",\"chip_c\":%.1f,\"pmu_c\":%.1f}",
+                 (long long)trip.when, trip.up_s, jnum(trip.chip_c), jnum(trip.pmu_c));
+    }
+    ESP_LOGI(TAG, "boot: chip %.1f C, PMU %.1f C; %s; thermal trips ever %" PRIu32 "%s", s_thermal.chip_c, s_thermal.pmu_c, chg_txt,
+             trip.count, off & 0x02 ? " (the PMU says the last power-off was by software: our trip)" : "");
+    char now[32], buf[640];
     snprintf(buf, sizeof(buf),
              "{\"t\":\"boot\",\"time\":\"%s\",\"up_s\":%lld,\"reset\":\"%s\",\"rtc_ram\":\"%s\",\"pmu_on\":\"%02x\","
-             "\"pmu_on_src\":\"%s\",\"pmu_off\":\"%02x\",\"pmu_off_src\":\"%s\",\"crash_streak\":%" PRIu32 "}",
+             "\"pmu_on_src\":\"%s\",\"pmu_off\":\"%02x\",\"pmu_off_src\":\"%s\",\"crash_streak\":%" PRIu32 ","
+             "\"chip_c\":%.1f,\"pmu_c\":%.1f,\"chg_ma\":%d,\"chg_mv\":%d,\"in_ma\":%d,\"treg_c\":%d,"
+             "\"trips\":%" PRIu32 ",\"last_trip\":%s}",
              timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000000), why, rtc, on, on_txt, off, off_txt,
-             s_panic_streak);
+             s_panic_streak, jnum(s_thermal.chip_c), jnum(s_thermal.pmu_c), pmu_charge_ma(), pmu_charge_target_mv(),
+             pmu_input_limit_ma(), pmu_thermal_reg_c(), trip.count, trip_txt);
     sdlog_aux_write(1, buf);
 }
 
@@ -594,7 +724,7 @@ void app_main(void)
     sdlog_init(); /* first, so every line below is in the ring before a card is even mounted */
     /* Our own tags at DEBUG from the first line; third-party stays at the INFO default. */
     static const char *const own_tags[] = {"wordbook", "recog", "book", "cards", "photo", "player", "sdcard", "sdlog",
-                                           "time", "rtc", "wifi", "maint", "button", "devcmd", "audio_io"};
+                                           "time", "rtc", "wifi", "maint", "button", "devcmd", "audio_io", "pmu", "thermal"};
     for (size_t i = 0; i < sizeof(own_tags) / sizeof(own_tags[0]); i++) {
         esp_log_level_set(own_tags[i], ESP_LOG_DEBUG);
     }
@@ -634,6 +764,8 @@ void app_main(void)
         ESP_LOGE(TAG, "AXP2101 not answering; rails left as found");
     }
     pmu_set_record_cb(state_record);
+    thermal_init();
+    thermal_boot_check(); /* a board still too hot from the last run goes straight back off */
 
     /* Clock first, so the log file header and FAT timestamps carry real time. */
     cards_status("setting the clock");
@@ -686,6 +818,7 @@ void app_main(void)
         /* The card can come and go whether we are awake or asleep. */
         bool card_changed = sdcard_poll();
         char cmd = devcmd_take();
+        thermal_step(); /* every turn, in every mode: the guard runs asleep and in maintenance too */
         /* What a press or command lands on, taken before it acts; the record names the outcome. */
         const char *screen_before = screen_name();
         bool asleep_before = s_asleep, maint_before = s_maint;
@@ -695,6 +828,9 @@ void app_main(void)
             if (s_maint) {
                 leave_maint();
                 action = "maint_out";
+            } else if (s_thermal.level >= THERMAL_HOT) {
+                hot_ack(); /* the radio would only add heat */
+                action = "ignored_hot";
             } else {
                 enter_maint();
                 action = s_maint ? "maint_in" : "maint_failed";
@@ -705,16 +841,23 @@ void app_main(void)
              * seconds; with "brighten" invisible on a bright screen that read as "black
              * screen, no response to any button". Sleep is the quiet timer's or the
              * serial `s`'s job, and every press now says something on the status line. */
-            if (s_asleep) {
-                leave_sleep(true);
-                action = "wake";
+            if (s_thermal.level >= THERMAL_HOT) {
+                hot_ack(); /* a board that is cooling stays asleep, and says so for three seconds */
+                action = "ignored_hot";
             } else {
-                action = s_dimmed ? "brighten" : "awake";
-                wake_screen();
+                if (s_asleep) {
+                    leave_sleep(true);
+                    action = "wake";
+                } else {
+                    action = s_dimmed ? "brighten" : "awake";
+                    wake_screen();
+                }
+                show_ack("awake - hold BOOT for setup");
             }
-            show_ack("awake - hold BOOT for setup");
         } else if (cmd == 's' && !s_maint) {
-            if (s_asleep) {
+            if (s_asleep && s_thermal.level >= THERMAL_HOT) {
+                action = "ignored_hot";
+            } else if (s_asleep) {
                 leave_sleep(true);
                 action = "wake";
             } else {
@@ -743,6 +886,10 @@ void app_main(void)
                 ESP_LOGI(TAG, "power: usb=%d %u mV, battery=%d %u mV %u%%, vsys %u mV, %s", ps.vbus_in, ps.vbus_mv, ps.batt_present,
                          ps.vbat_mv, ps.batt_pct, ps.vsys_mv, ps.charging ? "charging" : "not charging");
             }
+            char chg_txt[120];
+            pmu_charger_text(chg_txt, sizeof(chg_txt));
+            ESP_LOGI(TAG, "thermal: chip %.1f C, PMU %.1f C, level %s%s; %s", s_thermal.chip_c, s_thermal.pmu_c,
+                     thermal_level_name(s_thermal.level), s_thermal.simulated ? " (SIMULATED)" : "", chg_txt);
         } else if (cmd == 'b') {
             s_dimmed = false;
             s_last_activity = xTaskGetTickCount();
@@ -752,12 +899,16 @@ void app_main(void)
             cards_panel_reinit();
             cards_show_idle();
             action = "panel_reinit";
+        } else if (cmd == 't') {
+            thermal_simulate_step();
+            action = "thermal_sim";
         } else if (cmd == 'i') {
             action = "info";
             char now[32];
-            ESP_LOGI(TAG, "info: %s heard=%" PRIu32 " words=%u card=%d files=%d log=%ld B maint=%d asleep=%d internal=%u",
+            ESP_LOGI(TAG, "info: %s heard=%" PRIu32 " words=%u card=%d files=%d log=%ld B maint=%d asleep=%d internal=%u chip=%.1fC pmu=%.1fC thermal=%s",
                      timesync_now_str(now, sizeof(now)), s_heard, (unsigned)s_book.count, sdcard_present(), s_files_ok,
-                     sdlog_size(), s_maint, s_asleep, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                     sdlog_size(), s_maint, s_asleep, heap_caps_get_free_size(MALLOC_CAP_INTERNAL), s_thermal.chip_c,
+                     s_thermal.pmu_c, thermal_level_name(s_thermal.level));
         }
         if (bev != BUTTON_NONE) {
             input_record("boot", bev == BUTTON_LONG ? "long" : "short", button_last_held_ms(), -1, -1, screen_before,
@@ -795,6 +946,10 @@ void app_main(void)
                 tap_record("ignored_asleep"); /* the glass still reports with the panel dark */
             }
             pmu_poll(); /* USB in/out and the battery curve are recorded through a sleep as well */
+            if (s_hot_ack_until && (int32_t)(xTaskGetTickCount() - s_hot_ack_until) >= 0) {
+                s_hot_ack_until = 0;
+                bsp_display_brightness_set(0); /* the "cooling down" note has been up long enough */
+            }
             continue; /* nothing else runs while asleep; the loop still turns for the button and card */
         }
         if (s_ack_until && (int32_t)(xTaskGetTickCount() - s_ack_until) >= 0) {

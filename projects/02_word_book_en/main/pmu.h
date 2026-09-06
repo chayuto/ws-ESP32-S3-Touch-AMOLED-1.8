@@ -50,6 +50,27 @@ void pmu_rail_bits(uint8_t *dcdc_en, uint8_t *ldo_en0, uint8_t *ldo_en1);
 /* Seconds between periodic records; the app slows it while asleep. */
 void pmu_set_record_period_s(int seconds);
 
+/* The PMU's own die temperature (REG 3C/3D), degrees C; NAN if it did not answer. Two register reads. */
+float pmu_die_temp_c(void);
+
+/*
+ * Charger controls, for the thermal guard. Charging is the biggest heater on the board.
+ * Enable/disable is REG 18 bit 1; it persists in the PMU until the PMU loses power, so
+ * pmu_init() turns charging back on at every boot and says so if it found it off.
+ */
+esp_err_t pmu_set_charging(bool on);
+bool pmu_charging_enabled(void);
+
+/* Charger configuration as found: input limit, charge current and target, the PMU's own thermal throttle. */
+int pmu_input_limit_ma(void);
+int pmu_charge_ma(void);
+int pmu_charge_target_mv(void);
+int pmu_thermal_reg_c(void);
+void pmu_charger_text(char *buf, size_t n);
+
+/* Soft power-off (REG 10 bit 0): every rail off, the PMU waits for PWR or a USB insert. Does not return on success. */
+esp_err_t pmu_power_off(void);
+
 /*
  * Why the PMU last powered on (REG 20) and off (REG 21): raw bits and readable names
  * ("vbus_insert", "pwr_key_held", ... or "none"). Answers "did it lose power?" at boot.

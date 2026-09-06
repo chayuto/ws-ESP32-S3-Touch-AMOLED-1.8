@@ -24,6 +24,7 @@
 #include "sdcard.h"
 #include "sdkconfig.h"
 #include "sdlog.h"
+#include "thermal.h"
 #include "timesync.h"
 #include "wifi_sta.h"
 
@@ -184,6 +185,12 @@ static esp_err_t h_metrics(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "vsys_mv", ps.vsys_mv);
     cJSON_AddNumberToObject(o, "batt_pct", ps.batt_pct);
     cJSON_AddBoolToObject(o, "charging", ps.charging);
+    cJSON_AddBoolToObject(o, "charger_enabled", pmu_charging_enabled());
+    thermal_status_t ts;
+    thermal_status(&ts);
+    cJSON_AddNumberToObject(o, "chip_c", ts.chip_c);
+    cJSON_AddNumberToObject(o, "pmu_c", ts.pmu_c);
+    cJSON_AddStringToObject(o, "thermal", thermal_level_name(ts.level));
     cJSON_AddNumberToObject(o, "min_prob_pct", CONFIG_WORDBOOK_MIN_PROB_PCT);
     cJSON_AddNumberToObject(o, "sound_prob_pct", CONFIG_WORDBOOK_SOUND_PROB_PCT);
     return send_json(req, o);
