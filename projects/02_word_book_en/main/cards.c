@@ -112,9 +112,13 @@ lv_display_t *cards_display_start(void)
 
 static void screen_pressed_cb(lv_event_t *e)
 {
-    (void)e;
+    lv_point_t p = {.x = -1, .y = -1};
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (indev) {
+        lv_indev_get_point(indev, &p);
+    }
     if (s_on_tap) {
-        s_on_tap();
+        s_on_tap((int16_t)p.x, (int16_t)p.y);
     }
 }
 

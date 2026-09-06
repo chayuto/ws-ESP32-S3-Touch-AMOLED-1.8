@@ -18,6 +18,7 @@ static const char *TAG = "button";
 static bool s_was_down;
 static int64_t s_down_since;
 static bool s_long_fired;
+static uint32_t s_last_held_ms;
 
 void button_init(void)
 {
@@ -37,10 +38,17 @@ button_event_t button_poll(void)
         s_long_fired = false;
     } else if (down && !s_long_fired && now - s_down_since >= LONG_PRESS_US) {
         s_long_fired = true;
+        s_last_held_ms = (uint32_t)((now - s_down_since) / 1000);
         ev = BUTTON_LONG;
     } else if (!down && s_was_down && !s_long_fired) {
+        s_last_held_ms = (uint32_t)((now - s_down_since) / 1000);
         ev = BUTTON_SHORT;
     }
     s_was_down = down;
     return ev;
+}
+
+uint32_t button_last_held_ms(void)
+{
+    return s_last_held_ms;
 }

@@ -5,7 +5,8 @@
 #include "book.h"
 #include "lvgl.h"
 
-typedef void (*cards_tap_cb_t)(void);
+/* A press on the glass, with where it landed (panel pixels; -1,-1 if unknown). */
+typedef void (*cards_tap_cb_t)(int16_t x, int16_t y);
 
 /*
  * Bring up the panel, touch and LVGL with a draw buffer in internal, DMA-capable

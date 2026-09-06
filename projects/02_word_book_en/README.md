@@ -241,13 +241,36 @@ Background: the screen was reported dark several times. Every case in the card l
 a sleep (BOOT on a lit screen), a dim (12 % / 35 % on a near-black card) or a second press
 right after waking — never a rail. The record makes that readable in one line per event.
 
+### Input records
+
+Every BOOT press, tap on the glass and serial command writes an `input` record to the
+same state file, and one line to the log — taken *before* the action, so it says what the
+press landed on and what it did: source (`boot`, `touch`, `serial`), kind (`short`,
+`long`, `tap`, or the command letter), hold time in ms for the button (a long press
+reports the 1500 ms threshold, since it fires while still held), touch point in panel
+pixels, screen state (`on`, `dim`, `off`), asleep and maintenance flags, seconds since the
+last wake, and the outcome: `wake`, `brighten`, `sleep`, `keep_awake`, `maint_in`,
+`maint_out`, `maint_failed`, `reload`, `power`, `bright`, `panel_reinit`, `info`,
+`debug_all`, `debug_own`, `ignored`, `ignored_asleep`, `ignored_maint`.
+
+```
+I (91234) wordbook: input: boot short, held 180 ms, screen dim, 75 s since wake -> brighten
+{"t":"input","time":"2026-09-06 11:20:14","up_s":91,"src":"boot","kind":"short","held_ms":180,"x":-1,"y":-1,"screen":"dim","asleep":0,"maint":0,"since_wake_s":75,"action":"brighten"}
+```
+
+```zsh
+jq -c 'select(.t=="input") | [.time, .src, .kind, .screen, .action]' 02_word_book_en.state.jsonl
+```
+
 ### Buttons
 
 A short BOOT press on a **dark or dimmed** screen wakes it — never sleeps it — and a press
 within three seconds of waking only brightens. Sleep is a short press on a fully lit
 screen that has been lit for a while, or the quiet timer. A long press is maintenance
 mode. The idle card is a plain blue with the words on it so a dimmed (50 %) board still
-looks on. Serial: `p` rails and power, `b` full brightness, `x` panel re-init.
+looks on. Serial: `p` rails and power, `b` full brightness, `x` panel re-init. Every
+press, tap and command is recorded with what it landed on and what it did (input records,
+above).
 
 ### Numbers
 
@@ -447,7 +470,7 @@ main/maint.[ch]+.html  maintenance mode: HTTP API + page
 main/devcmd.[ch]       single-letter serial commands
 main/clog.[ch]         classifier + environment records (JSON Lines) → sdlog aux channel 0
 main/pmu.[ch]          AXP2101: rails, battery, USB; triggers the state record (sdlog aux channel 1)
-main/button.[ch]       BOOT button (GPIO 0), polled: press = sleep / wake
+main/button.[ch]       BOOT button (GPIO 0), polled: short / long, hold time
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)
 main/fonts/            lv_font_montserrat_72, generated with lv_font_conv

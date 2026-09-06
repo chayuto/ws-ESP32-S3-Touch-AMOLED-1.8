@@ -123,9 +123,13 @@ static void maybe_dim(void)
     }
 }
 
-/* From the LVGL task: just flag it, the main loop does the work. */
-static void on_tap(void)
+/* From the LVGL task: note where, flag it, the main loop does the work. */
+static volatile int16_t s_tap_x = -1, s_tap_y = -1;
+
+static void on_tap(int16_t x, int16_t y)
 {
+    s_tap_x = x;
+    s_tap_y = y;
     xSemaphoreGive(s_tap);
 }
 
@@ -165,6 +169,49 @@ static void state_record(const char *event)
              (unsigned)s_book.count, (unsigned long)s_heard, s_last_word_text ? s_last_word_text : "", s_last_prob,
              mic_avg, mic_peak, speech);
     sdlog_aux_write(1, buf);
+}
+
+/* --- Every press, tap and serial command: what it landed on and what it did. --- */
+
+static const char *screen_name(void)
+{
+    return s_asleep ? "off" : s_dimmed ? "dim" : "on";
+}
+
+static uint32_t since_wake_s(void)
+{
+    return (uint32_t)((xTaskGetTickCount() - s_woke_at) / configTICK_RATE_HZ);
+}
+
+/*
+ * One line in the log and one `input` record in the state file per interaction, taken
+ * before the action changes anything: the screen it landed on, whether the board was
+ * asleep or in maintenance, seconds since the last wake, and the outcome. The "screen
+ * went dark" question is then answered by one line instead of a log read.
+ */
+static void input_record(const char *src, const char *kind, uint32_t held_ms, int x, int y, const char *screen_before,
+                         bool asleep_before, bool maint_before, uint32_t wake_s, const char *action)
+{
+    char detail[40] = "";
+    if (strcmp(src, "boot") == 0) {
+        snprintf(detail, sizeof(detail), ", held %lu ms", (unsigned long)held_ms);
+    } else if (strcmp(src, "touch") == 0) {
+        snprintf(detail, sizeof(detail), " at %d,%d", x, y);
+    }
+    ESP_LOGI(TAG, "input: %s %s%s, screen %s%s%s, %lu s since wake -> %s", src, kind, detail, screen_before,
+             asleep_before ? " (asleep)" : "", maint_before ? " (maintenance)" : "", (unsigned long)wake_s, action);
+    char now[32], buf[320];
+    snprintf(buf, sizeof(buf),
+             "{\"t\":\"input\",\"time\":\"%s\",\"up_s\":%lld,\"src\":\"%s\",\"kind\":\"%s\",\"held_ms\":%lu,"
+             "\"x\":%d,\"y\":%d,\"screen\":\"%s\",\"asleep\":%d,\"maint\":%d,\"since_wake_s\":%lu,\"action\":\"%s\"}",
+             timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000000), src, kind,
+             (unsigned long)held_ms, x, y, screen_before, asleep_before, maint_before, (unsigned long)wake_s, action);
+    sdlog_aux_write(1, buf);
+}
+
+static void tap_record(const char *action)
+{
+    input_record("touch", "tap", 0, s_tap_x, s_tap_y, screen_name(), s_asleep, s_maint, since_wake_s(), action);
 }
 
 /* --- Maintenance: Wi-Fi + HTTP API, recogniser stopped. Long press or 'm' toggles. --- */
@@ -280,13 +327,6 @@ static void on_word(const word_event_t *ev)
     if (w.prompt[0] && player_wav(w.prompt) != ESP_OK) {
         sdcard_report_io_error();
     }
-}
-
-/* Tap: wake the screen if it has dimmed. Nothing else; taps make no sound. */
-static void on_tap_main(void)
-{
-    ESP_LOGI(TAG, "tap");
-    wake_screen();
 }
 
 static void restart_recognizer(void)
@@ -551,17 +591,21 @@ void app_main(void)
             xQueueReset(s_events); /* anything heard while the chime played was us */
         }
         button_event_t bev = button_poll();
-        if (bev != BUTTON_NONE) {
-            ESP_LOGI(TAG, "BOOT %s press", bev == BUTTON_LONG ? "long" : "short");
-        }
         /* The card can come and go whether we are awake or asleep. */
         bool card_changed = sdcard_poll();
         char cmd = devcmd_take();
+        /* What a press or command lands on, taken before it acts; the record names the outcome. */
+        const char *screen_before = screen_name();
+        bool asleep_before = s_asleep, maint_before = s_maint;
+        uint32_t wake_s = since_wake_s();
+        const char *action = NULL;
         if (bev == BUTTON_LONG || cmd == 'm') {
             if (s_maint) {
                 leave_maint();
+                action = "maint_out";
             } else {
                 enter_maint();
+                action = s_maint ? "maint_in" : "maint_failed";
             }
         } else if ((bev == BUTTON_SHORT || cmd == 's') && !s_maint) {
             /* A press on a dark or dimmed screen means "wake up", never "go to sleep":
@@ -569,16 +613,20 @@ void app_main(void)
              * was trying to wake it. Sleep only from a fully lit screen. */
             if (s_asleep) {
                 leave_sleep();
+                action = "wake";
             } else if (s_dimmed || xTaskGetTickCount() - s_woke_at < pdMS_TO_TICKS(3000)) {
                 /* A press on a dim screen, or a second press right after waking, is
                  * someone making sure it is on. Never sleep on those (09:39: two presses
                  * 1.7 s apart, the second put a just-woken board to sleep). */
                 wake_screen();
+                action = "brighten";
             } else {
                 enter_sleep("button");
+                action = "sleep";
             }
         } else if (cmd == 'r' && sdcard_present()) {
             card_arrived(false);
+            action = "reload";
         } else if (cmd == 'd') {
             static bool all_debug;
             all_debug = !all_debug;
@@ -589,7 +637,9 @@ void app_main(void)
                     esp_log_level_set(own_tags[i], ESP_LOG_DEBUG);
                 }
             }
+            action = all_debug ? "debug_all" : "debug_own";
         } else if (cmd == 'p') {
+            action = "power";
             pmu_dump_rails("on request");
             pmu_status_t ps;
             if (pmu_read(&ps) == ESP_OK) {
@@ -600,18 +650,31 @@ void app_main(void)
             s_dimmed = false;
             s_last_activity = xTaskGetTickCount();
             cards_force_bright();
+            action = "bright";
         } else if (cmd == 'x') {
             cards_panel_reinit();
             cards_show_idle();
+            action = "panel_reinit";
         } else if (cmd == 'i') {
+            action = "info";
             char now[32];
             ESP_LOGI(TAG, "info: %s heard=%" PRIu32 " words=%u card=%d files=%d log=%ld B maint=%d asleep=%d internal=%u",
                      timesync_now_str(now, sizeof(now)), s_heard, (unsigned)s_book.count, sdcard_present(), s_files_ok,
                      sdlog_size(), s_maint, s_asleep, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         }
+        if (bev != BUTTON_NONE) {
+            input_record("boot", bev == BUTTON_LONG ? "long" : "short", button_last_held_ms(), -1, -1, screen_before,
+                         asleep_before, maint_before, wake_s, action ? action : "ignored");
+        } else if (cmd) {
+            char kind[2] = {cmd, '\0'};
+            input_record("serial", kind, 0, -1, -1, screen_before, asleep_before, maint_before, wake_s,
+                         action ? action : "ignored");
+        }
         if (s_maint) {
             xQueueReset(s_events);
-            xSemaphoreTake(s_tap, 0);
+            if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
+                tap_record("ignored_maint");
+            }
             if (maint_take_reboot()) {
                 vTaskDelay(pdMS_TO_TICKS(300));
                 esp_restart();
@@ -631,11 +694,16 @@ void app_main(void)
         }
         if (s_asleep) {
             xQueueReset(s_events);
-            xSemaphoreTake(s_tap, 0);
+            if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
+                tap_record("ignored_asleep"); /* the glass still reports with the panel dark */
+            }
             continue; /* nothing else runs while asleep; the loop still turns for the button and card */
         }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
-            on_tap_main();
+            /* Tap: wake the screen if it has dimmed. Nothing else; taps make no sound. */
+            const char *what = s_dimmed ? "brighten" : "keep_awake";
+            tap_record(what);
+            wake_screen();
         }
         if (xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_SLEEP_AFTER_S * 60 * 1000)) {
             enter_sleep("quiet");
