@@ -1,0 +1,40 @@
+<!doctype html><meta charset=utf-8><title>05_dictation</title>
+<style>
+body{font:14px/1.5 system-ui,sans-serif;margin:0;background:#11151a;color:#dde3ea}
+header{padding:14px 18px;background:#0b0e12;border-bottom:1px solid #222a33}
+h1{margin:0;font-size:16px;font-weight:600}
+main{padding:18px;max-width:900px}
+section{margin-bottom:22px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#7d8b9a;margin:0 0 8px}
+pre{background:#0b0e12;border:1px solid #222a33;border-radius:6px;padding:12px;overflow:auto;max-height:340px;font-size:12px;margin:0}
+.mx{border-left:3px solid #ffcc44;padding-left:12px}
+button{font:inherit;background:#1d2733;color:#dde3ea;border:1px solid #2e3b4a;border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{background:#25313f}
+</style>
+<header><h1>05_dictation &mdash; maintenance</h1></header>
+<main>
+<section class=mx><h2>MX-1 &mdash; raw_string probe</h2><pre id=mx>loading</pre></section>
+<section><h2>Metrics</h2><pre id=metrics>loading</pre></section>
+<section><h2>State</h2><pre id=state>loading</pre></section>
+<section><h2>Decode records</h2><pre id=decodes>loading</pre></section>
+<section><h2>Log</h2><pre id=log>loading</pre></section>
+<section><button onclick="fetch('/api/reboot',{method:'POST'}).then(()=>alert('reboot asked for'))">Reboot</button></section>
+</main>
+<script>
+const txt=(id,u)=>fetch(u).then(r=>r.text()).then(t=>document.getElementById(id).textContent=t)
+  .catch(e=>document.getElementById(id).textContent='('+e+')');
+function refresh(){
+  fetch('/api/metrics').then(r=>r.json()).then(m=>{
+    document.getElementById('metrics').textContent=JSON.stringify(m,null,2);
+    const x=m.mx1||{};
+    document.getElementById('mx').textContent=
+      'results examined : '+x.results+'\nraw_string set   : '+x.raw_nonempty+
+      '\nraw != string    : '+x.raw_differs+'\n\n'+
+      (x.results&&!x.raw_nonempty ? 'raw_string always empty -> B1 looks dead'
+       : x.raw_differs ? 'raw_string carries something the command graph does not -> B1 is ALIVE'
+       : 'not enough data yet - speak at the board');
+  }).catch(e=>document.getElementById('mx').textContent='('+e+')');
+  txt('state','/api/state'); txt('decodes','/api/decodes'); txt('log','/api/log');
+}
+refresh(); setInterval(refresh,4000);
+</script>

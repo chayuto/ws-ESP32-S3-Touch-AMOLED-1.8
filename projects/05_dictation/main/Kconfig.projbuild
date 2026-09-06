@@ -1,0 +1,177 @@
+menu "Dictation"
+
+    choice DICT_LANG
+        prompt "Recognition language"
+        default DICT_LANG_EN
+        help
+            Picks the app-side behaviour: probe vocabulary, font, and dictionary path.
+            It does NOT pick the MultiNet model - that is esp-sr's own Kconfig, set by
+            sdkconfig.en / sdkconfig.cn. Keep the two in step; app_main checks at boot
+            and refuses to start if they disagree.
+
+    config DICT_LANG_EN
+        bool "English (mn7_en)"
+
+    config DICT_LANG_CN
+        bool "Chinese (mn7_cn)"
+
+    endchoice
+
+    config DICT_PROBE_ON_BOOT
+        bool "Run the MX experiments at boot and log the results"
+        default y
+        help
+            MX-1 logs raw_string on every MultiNet result, detected AND timed out.
+            MX-2 loads a syllable table instead of words. Both exist to answer whether
+            this project is possible at all - see docs/design/05_dictation.md. Leave on
+            until the go/no-go is settled.
+
+    config DICT_PROBE_SYLLABLES
+        bool "MX-2: load syllables instead of words"
+        depends on DICT_PROBE_ON_BOOT
+        default n
+        help
+            Loads the syllable table rather than the small word list, so continuous
+            speech has a chance of firing syllable after syllable. Off by default so
+            MX-1 is measured against a known-good vocabulary first.
+
+    config DICT_MIN_PROB_PCT
+        int "Confidence floor, percent"
+        range 0 100
+        default 20
+        help
+            Deliberately low. On a probe build we want to see what the engine produces,
+            not a filtered view of it. Every result is logged regardless; this only
+            gates what reaches the screen.
+
+    config DICT_VAD_ENERGY_DBFS
+        int "VAD energy floor, dBFS"
+        range -80 -20
+        default -48
+        help
+            Below this the neural VAD will not call it speech. 02 measured a quiet room
+            producing detections at 0.135 with VAD reporting no speech; this floor is
+            what removed them.
+
+    config DICT_VAD_TAIL_MS
+        int "Silence before an utterance is considered finished, ms"
+        range 200 3000
+        default 700
+
+    config DICT_BRIGHTNESS
+        int "Screen brightness, percent"
+        range 5 100
+        default 85
+
+    config DICT_NTP
+        bool "Set the clock from NTP in maintenance mode"
+        default y
+
+    config DICT_LONG_PRESS_MS
+        int "Hold BOOT this long for maintenance mode, ms"
+        range 300 5000
+        default 1200
+
+    config DICT_MIC_GAIN_DB
+        int "Microphone gain (dB)"
+        range 0 42
+        default 30
+        help
+            ES8311 input PGA gain. At 30 dB an adult at arm's length peaks around
+            -12 dBFS with the room at -52 dBFS (2026-09-06). A soft-spoken child may
+            need 33-36; clipping shows as peaks at 0 dBFS in the "mic:" lines.
+
+    config DICT_VOLUME
+        int "Speaker volume (0-100)"
+        range 0 100
+        default 90
+        help
+            The vendor example uses 90 on V2 hardware and 70 on V1.
+
+    config DICT_TZ
+        string "Time zone (POSIX TZ string)"
+        default "AEST-10AEDT,M10.1.0,M4.1.0/3"
+        help
+            Used for timestamps in the log file. Default is Sydney.
+
+    config DICT_WIFI_SSID
+        string "Home Wi-Fi network for NTP"
+        depends on DICT_NTP
+        default ""
+
+    config DICT_WIFI_PASSWORD
+        string "Home Wi-Fi password"
+        depends on DICT_NTP
+        default ""
+
+    config DICT_NTP_SERVER
+        string "NTP server"
+        depends on DICT_NTP
+        default "pool.ntp.org"
+
+    config DICT_NTP_TIMEOUT_S
+        int "Seconds to wait for Wi-Fi before giving up"
+        depends on DICT_NTP
+        range 3 60
+        default 15
+
+    config DICT_LOG_MAX_KB
+        int "Log file cap (KB) before rotation to .1"
+        range 64 65536
+        default 4096
+
+    config DICT_POWER_LOG_S
+        int "Seconds between power records"
+        range 5 3600
+        default 30
+
+    config DICT_MAINT_IDLE_MIN
+        int "Minutes without a request before maintenance mode ends"
+        range 1 120
+        default 10
+
+    config DICT_THERMAL_WARM_C
+        int "Thermal guard: warm, die C (screen dims)"
+        range 30 120
+        default 60
+        help
+            The hotter of the chip die and the PMU die, read once a second. At warm the
+            screen is held at the dim level and the status line says so. Die
+            temperatures run well above the case; calibrate against a thermometer on
+            the glass before trusting the defaults for a child's hands.
+
+    config DICT_THERMAL_HOT_C
+        int "Thermal guard: hot, die C (sleep, charger off, BOOT ignored)"
+        range 30 125
+        default 70
+
+    config DICT_THERMAL_TRIP_C
+        int "Thermal guard: trip, die C (PMU powers the board off)"
+        range 30 130
+        default 80
+        help
+            The board writes a marker to NVS, records the trip on the card, waits
+            three seconds for the card, and powers itself off through the PMU. It comes
+            back on PWR or a USB insert, and the boot record names the trip.
+
+    config DICT_THERMAL_HYST_C
+        int "Thermal guard: degrees below a line before the level drops"
+        range 1 20
+        default 5
+
+    config DICT_THERMAL_SAMPLES
+        int "Thermal guard: consecutive seconds that must agree before the level changes"
+        range 1 60
+        default 5
+
+    config DICT_PMU_TREG_C
+        int "PMU charger thermal regulation, die C (60, 80, 100 or 120)"
+        range 60 120
+        default 60
+        help
+            The AXP2101 lowers its own charge current once its die passes this line,
+            whether or not the firmware is running. Chip default 100. Values between
+            the four steps round down.
+
+
+endmenu
