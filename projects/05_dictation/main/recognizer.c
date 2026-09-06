@@ -38,6 +38,13 @@ static const char *TAG = "recog";
 
 /* MX-1 tallies, printed by recognizer_probe_summary(). */
 static uint32_t s_probe_results, s_probe_raw_nonempty, s_probe_raw_differs;
+/*
+ * Counted separately on purpose. "0 results" from the first run was ambiguous: it
+ * could mean MultiNet returns empty results, or that we never reach the branch that
+ * reads them. Those need completely different responses, so they get different
+ * counters. s_probe_calls counts every entry to probe_log_raw, empty or not.
+ */
+static uint32_t s_probe_calls, s_state_detected, s_state_timeout, s_state_detecting;
 static volatile bool s_hearing; /* last VAD verdict, for the state chip */
 
 #define RECOG_CORE      1
@@ -172,6 +179,7 @@ static void probe_log_raw(const esp_mn_results_t *r, const char *why, float vol_
     if (r == NULL) {
         return;
     }
+    s_probe_calls++;
     bool has_raw = r->raw_string[0] != '\0';
     bool has_str = r->string[0] != '\0';
     if (!has_raw && !has_str && r->num == 0) {
@@ -261,11 +269,15 @@ static void detect_task(void *arg)
 
         int64_t det_us = esp_timer_get_time();
         esp_mn_state_t state = s_mn->detect(s_mn_data, res->data);
+        if (state == ESP_MN_STATE_DETECTING) {
+            s_state_detecting++;
+        }
         det_us = esp_timer_get_time() - det_us;
         if (det_us > s_h_detect_max_us) {
             s_h_detect_max_us = det_us;
         }
         if (state == ESP_MN_STATE_DETECTED) {
+            s_state_detected++;
             esp_mn_results_t *r = s_mn->get_results(s_mn_data);
             probe_log_raw(r, "detected", res->data_volume, (int)res->vad_state, frames);
             for (int i = 0; i < r->num; i++) {
@@ -323,6 +335,7 @@ static void detect_task(void *arg)
              * only looks at detections cannot see out-of-vocabulary decoding at all.
              * 02 discarded this path without reading it. We read it first.
              */
+            s_state_timeout++;
             esp_mn_results_t *r = s_mn->get_results(s_mn_data);
             probe_log_raw(r, "timeout", res->data_volume, (int)res->vad_state, frames);
             /* Continuous listening: a timeout is just "nothing for a while". Reset and carry on. */
@@ -575,12 +588,19 @@ void recognizer_health(recognizer_health_t *out, bool reset)
 
 void recognizer_probe_summary(void)
 {
-    ESP_LOGW(TAG, "MX1 summary: %" PRIu32 " results, raw_string non-empty %" PRIu32 ", raw differs from string %" PRIu32,
-             s_probe_results, s_probe_raw_nonempty, s_probe_raw_differs);
-    if (s_probe_results > 0 && s_probe_raw_nonempty == 0) {
+    ESP_LOGW(TAG,
+             "MX1 summary: detect states [detecting %" PRIu32 " detected %" PRIu32 " timeout %" PRIu32 "], "
+             "probe calls %" PRIu32 ", non-empty %" PRIu32 ", raw_string set %" PRIu32 ", raw differs %" PRIu32,
+             s_state_detecting, s_state_detected, s_state_timeout, s_probe_calls, s_probe_results,
+             s_probe_raw_nonempty, s_probe_raw_differs);
+    if (s_probe_calls == 0) {
+        ESP_LOGW(TAG, "MX1: results never read - detect() is not reaching DETECTED or TIMEOUT. Inconclusive, not a verdict.");
+    } else if (s_probe_raw_nonempty == 0) {
         ESP_LOGW(TAG, "MX1 verdict so far: raw_string always empty -> option B1 is dead, see docs/design/05_dictation.md");
     } else if (s_probe_raw_differs > 0) {
         ESP_LOGW(TAG, "MX1 verdict so far: raw_string carries something the command graph does not -> B1 is ALIVE, look at it");
+    } else {
+        ESP_LOGW(TAG, "MX1 verdict so far: raw_string set but always equal to string -> B1 gives nothing extra");
     }
 }
 

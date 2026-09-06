@@ -1,5 +1,7 @@
 #include "sdlog.h"
 
+#include "driver/usb_serial_jtag.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -105,11 +107,25 @@ static bool drain(char *ring, size_t cap, volatile size_t *head, volatile size_t
  * event task overflowed on it once DEBUG lines were compiled in. */
 static char s_line[LOG_LINE_MAX];
 
+/*
+ * The console write can block forever, and on 2026-09-06 it did.
+ *
+ * devcmd_init() installs the USB-Serial-JTAG driver, which switches the console onto
+ * the driver's VFS path - documented in usb_serial_jtag_vfs.h as "read and write are
+ * blocking". With no host draining the TX FIFO, the next log write never returns. The
+ * board looked alive because the LVGL task kept the screen refreshed, but app_main was
+ * stuck inside ESP_LOG: no serial, no button, no heartbeat, nothing.
+ *
+ * So: the card is written FIRST and unconditionally, and the console is written only
+ * when a host is actually attached. The flight recorder is the record that matters -
+ * it must never be lost because nobody happened to be watching the serial port. A
+ * device that lives on a battery, unplugged, is the normal case here, not the
+ * exception.
+ */
 static int hook(const char *fmt, va_list args)
 {
     va_list copy;
     va_copy(copy, args);
-    int ret = s_console(fmt, args); /* console first, exactly as before */
 
     if (s_ring != NULL && !xPortInIsrContext()) {
         char *line = s_line;
@@ -122,7 +138,12 @@ static int hook(const char *fmt, va_list args)
         }
     }
     va_end(copy);
-    return ret;
+
+    /* Console last, and only to a host that is there to read it. */
+    if (!usb_serial_jtag_is_connected()) {
+        return 0;
+    }
+    return s_console(fmt, args);
 }
 
 static void drain_task(void *arg)

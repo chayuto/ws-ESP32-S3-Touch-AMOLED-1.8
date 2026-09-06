@@ -74,7 +74,30 @@ anyway.**
 Two independent ways to unbind MultiNet from its command list. Either would do; they are
 tested separately because they fail separately.
 
-### B1 — `raw_string`
+### B1 — `raw_string` — **RUN 2026-09-06. DEAD.**
+
+> **Result: `raw_string` is never populated.** Measured on hardware with mn7_en and a
+> valid vocabulary (`vocabulary: 11 of 11 words loaded`), across thousands of decode
+> frames and real detections:
+>
+> ```
+> MX1 detected num=1 vad=0 vol=-52.5 frame=1097 string=' STnP' raw_string=''
+> MX1 detected num=1 vad=1 vol=-55.3 frame=1193 string=' cP'   raw_string=''
+> MX1 summary: detect states [detecting 2495 detected .. timeout 14],
+>              probe calls 14, raw_string set 0, raw differs 0
+> ```
+>
+> `string` does carry a phoneme sequence — `STnP` for "stop", `cP` for "up" — but it is
+> the *matched command's* phonemes, which is exactly what "with commands graph" means.
+> The field documented as the decode without the graph stays empty on every result,
+> detected and timed out alike. The struct exposes it; MultiNet7 does not fill it.
+>
+> The probe deliberately read results on `ESP_MN_STATE_TIMEOUT` as well as `DETECTED`,
+> since out-of-vocabulary speech lands there — so this is not a case of looking in the
+> wrong branch. **B1 is closed. The project now rests entirely on B2.**
+
+The original reasoning, kept because it is why the experiment was worth running:
+
 
 `esp_mn_results_t` returns more than command IDs:
 
@@ -131,6 +154,8 @@ decision and not a disappointment.
 **Feasibility is unknown and cheap to establish.** Both experiments run inside
 `02_word_book_en`, on hardware that already works. Nothing new is built until they answer.
 
+- **MX-1 — DONE 2026-09-06, negative.** `raw_string` is always empty; see B1 above.
+  Originally scoped as:
 - **MX-1 — `raw_string`, ~10 minutes.** One `ESP_LOGI` of `res->raw_string` beside the
   existing result handling in `main/recognizer.c`. Flash. Say things outside the 20-word
   list. Read the serial.

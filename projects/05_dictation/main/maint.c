@@ -172,6 +172,10 @@ esp_err_t maint_start(maint_state_cb_t cb)
         snprintf(s_ip, sizeof(s_ip), "?");
     }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    /* LWIP_MAX_SOCKETS (8) minus the 3 httpd keeps for itself, minus one spare.
+     * The default of 7 fails httpd_start() with ESP_ERR_INVALID_ARG against our
+     * reduced socket pool - which is what happened on the first run here. */
+    cfg.max_open_sockets = 4;
     cfg.max_uri_handlers = 10;
     cfg.lru_purge_enable = true;
     cfg.stack_size = 6144;
