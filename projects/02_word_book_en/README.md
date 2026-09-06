@@ -184,9 +184,11 @@ connected and it was replaced by this the same day.
 
 ### Serial commands
 
-Single letters on the USB console (`printf 'm' > /dev/cu.usbmodem3101` with the port
-opened `-hupcl`; see the `serial-capture` skill): `m` maintenance, `s` sleep, `r` reload
-the card, `i` status line, `d` DEBUG on every tag.
+Single letters on the USB console, sent with
+`.claude/skills/serial-capture/scripts/send.sh <letter>` (holds the port open `-hupcl`
+around the byte; a bare `printf > /dev/cu.usbmodem3101` can lose it once the port has
+been closed and reopened): `m` maintenance, `s` sleep, `r` reload the card, `i` status
+line, `d` DEBUG on every tag.
 
 ### The card is also the flight recorder
 

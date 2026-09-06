@@ -69,6 +69,12 @@ pkill -f 'dd if=/dev/cu.usbmodem3101'; cat /tmp/tap.log
 ```
 
 `dd` opens below the modem-control layer and `-hupcl` stops the close from resetting.
+
+To **send a command** (`m`, `s`, `i`, ...), use `scripts/send.sh <char>`, which holds the
+port open with `-hupcl` around the byte. A bare `printf 'm' > /dev/cu.usbmodem3101` works
+the first time after an attach but can lose the byte once the port has been closed and
+reopened (2026-09-06: two maintenance "leave" commands vanished, the board sat in
+maintenance mode and was not listening). `send.sh` works while `attach.sh` is running.
 Confirmed on hardware: timestamps continue from the running boot (`I (40712)` → `I (90712)`)
 instead of restarting at `I (454)`, so the app keeps its state.
 
