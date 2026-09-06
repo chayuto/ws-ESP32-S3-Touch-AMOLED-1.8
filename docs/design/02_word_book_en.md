@@ -175,6 +175,8 @@ New `partitions.csv`: `nvs 24K / phy 4K / factory 4M / model 6M / storage 1M`.
 
 ## What project 3 (multilingual) needs, and what this project does about it
 
+*Renumbered 2026-09-06: the voice-controlled robot took slot 03 ([`03_voice_remote_en.md`](./03_voice_remote_en.md)), so the multilingual word book is now project 04. Everything below still holds, one number later.*
+
 MultiNet ships **English and Chinese only.** Thai — or anything else — will never come
 from this engine. Two real options for project 3:
 
