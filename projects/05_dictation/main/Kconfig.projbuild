@@ -35,6 +35,14 @@ menu "Dictation"
             speech has a chance of firing syllable after syllable. Off by default so
             MX-1 is measured against a known-good vocabulary first.
 
+    config DICT_SYLLABLE_LIMIT
+        int "Cap the syllable table at this many entries, 0 for all"
+        range 0 300
+        default 0
+        help
+            Diagnostic. 212 Mandarin syllables crash esp-sr's FST builder while 187
+            English commands are fine; this exists to find where the real limit is.
+
     config DICT_MIN_PROB_PCT
         int "Confidence floor, percent"
         range 0 100

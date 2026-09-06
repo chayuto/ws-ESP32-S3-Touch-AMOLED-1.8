@@ -62,13 +62,25 @@ static const word_def_t k_syllables[] = {
     {"su"}, {"sai"}, {"sao"}, {"sou"}, {"san"}, {"sen"}, {"sang"}, {"seng"},
 };
 
+/*
+ * Bisecting a crash. 212 accepted Mandarin syllables still take esp-sr's FST builder
+ * into a LoadProhibited null deref, while 187 English commands load fine - so the
+ * cause is neither the rejections nor sparse ids. CONFIG_DICT_SYLLABLE_LIMIT caps
+ * the table so the real ceiling can be found by experiment rather than guessed at.
+ */
 const word_def_t *syllables_table(size_t *count)
 {
-    *count = sizeof(k_syllables) / sizeof(k_syllables[0]);
+    size_t n = sizeof(k_syllables) / sizeof(k_syllables[0]);
+#if CONFIG_DICT_SYLLABLE_LIMIT > 0
+    if (n > CONFIG_DICT_SYLLABLE_LIMIT) {
+        n = CONFIG_DICT_SYLLABLE_LIMIT;
+    }
+#endif
+    *count = n;
     return k_syllables;
 }
 
-const char *syllables_kind(void) { return "mandarin syllables (215, curated)"; }
+const char *syllables_kind(void) { return "mandarin syllables (curated)"; }
 
 #else
 

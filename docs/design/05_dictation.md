@@ -1,7 +1,9 @@
 # 05_dictation — offline speech to text, printed on the glass
 
-*Design note, 2026-09-06. Status: proposed, **feasibility unproven**.*
-*Two experiments gate the whole project — see [Go/no-go](#gono-go).*
+*Design note, 2026-09-06. Updated 2026-09-07.*
+*Status: **PAUSED after both experiments ran.** B1 is dead, B2 works in English only,*
+*and the Mandarin route the design preferred is closed by an esp-sr limitation.*
+*See [Where this ended](#where-this-ended).*
 
 ## What it is
 
@@ -188,6 +190,54 @@ it; and 300 < 400.
 05 becomes a 300-command phrase board — offline, working, and not dictation — or is
 shelved pending research into an ESP32-P4 class part. Stated here so the fallback is a
 decision and not a disappointment.
+
+## Where this ended
+
+Both gating experiments ran on hardware on 2026-09-06/07. Summary first, detail in the
+option sections above.
+
+| | result |
+| --- | --- |
+| **B1** — `raw_string` | **dead.** Never populated, on detections or timeouts |
+| **B2** — English, 187 words | **works.** 6 detections inside one 4.73 s utterance |
+| **B2** — Mandarin, 212 syllables | **crash** in esp-sr's `Build fst from commands` |
+| **B2** — Mandarin, 100 syllables | crash |
+| **B2** — Mandarin, 20 syllables | crash |
+
+**Finding: esp-sr's Chinese MultiNet will not take single-syllable pinyin commands.**
+Twenty crash exactly as two hundred do, so it is the content and not the count -
+English took 187 commands in the same build without complaint. The engine expects
+Chinese commands as words (`ni hao`, `da kai`), not as a syllable inventory.
+
+That closes the route this note called the most promising. Mandarin was the B2
+candidate precisely because ~400 toneless syllables nearly fit the 300-command
+ceiling; if the engine refuses single syllables, the inventory cannot be loaded at all
+and the ceiling never even comes into it.
+
+**What survives: B2 in its English form** - a word list, streaming, with the accuracy
+recorded in the B2 section. Roughly one word in four, function words, every confidence
+under the 0.20 floor. The mechanism is real and the transcript is not yet usable.
+
+### Not yet done
+
+- The Mandarin **multi-syllable control** was built but never run: does the Chinese
+  model work at all with word-shaped commands? Until that runs, "Chinese refuses
+  single syllables" is strongly evidenced but the counterfactual is untested.
+- A **human voice** has never been measured. Every number here comes from injected
+  TTS. Espressif train on TTS too, so it is a fair proxy, but it is a proxy.
+
+### What this cost, and the guard that was missing
+
+A bad vocabulary crash-looped the board three times, each needing a manual BOOT+PWR
+into download mode, and one loop drove the codec and panel hard enough to flash the
+screen and make the speaker pop several times a second.
+
+**02 drops into safe mode after three consecutive crashes and 05 shipped without it.**
+That guard is the difference between a bad config value being a log line and being a
+board someone has to physically rescue. It is now implemented - an `RTC_NOINIT` streak
+counter that survives a panic but not a power cycle, falling back to the small known
+good vocabulary on the fourth boot - but it went in *after* the damage, which is the
+wrong order. **Port the safety before the experiment, not after it.**
 
 ## Go/no-go
 

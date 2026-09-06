@@ -26,6 +26,7 @@
 #include "display.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -43,6 +44,47 @@
 #include "timesync.h"
 
 static const char *TAG = "dictation";
+
+/*
+ * Crash-streak safe mode. 02 has this and 05 shipped without it, which on 2026-09-07
+ * turned a bad vocabulary into a board that boot-looped until someone held BOOT+PWR
+ * to force download mode. A device that can strand itself on a config value is not
+ * finished. RTC_NOINIT survives a panic reset but not a power cycle, which is exactly
+ * the lifetime wanted: three panics in a row and the next boot loads the small known
+ * good vocabulary instead of whatever is being experimented with.
+ */
+#define SAFE_MODE_STREAK 3
+#define BOOT_OK_AFTER_MS 20000
+static RTC_NOINIT_ATTR uint32_t s_boot_streak;
+static RTC_NOINIT_ATTR uint32_t s_boot_magic;
+#define BOOT_MAGIC 0x05D1C7A7
+static bool s_safe_mode;
+
+static void boot_streak_begin(void)
+{
+    esp_reset_reason_t rr = esp_reset_reason();
+    if (s_boot_magic != BOOT_MAGIC || rr == ESP_RST_POWERON) {
+        s_boot_magic = BOOT_MAGIC;
+        s_boot_streak = 0;
+    }
+    s_boot_streak++;
+    s_safe_mode = s_boot_streak > SAFE_MODE_STREAK;
+    if (s_safe_mode) {
+        ESP_LOGE(TAG, "SAFE MODE: %" PRIu32 " boots without a clean run. Loading the small vocabulary, not the "
+                      "experiment. Power-cycle to clear.", s_boot_streak);
+    } else if (s_boot_streak > 1) {
+        ESP_LOGW(TAG, "boot streak %" PRIu32 " of %d before safe mode", s_boot_streak, SAFE_MODE_STREAK);
+    }
+}
+
+/* Called once the board has run long enough to count as healthy. */
+static void boot_streak_clear(void)
+{
+    if (s_boot_streak != 0) {
+        ESP_LOGI(TAG, "boot looks healthy; streak cleared");
+        s_boot_streak = 0;
+    }
+}
 
 #define LOG_PATH      "/sdcard/05_dictation.log"
 #define DECODES_PATH  "/sdcard/05_dictation.decodes.jsonl"
@@ -174,6 +216,7 @@ static void handle_devcmd(char c)
 void app_main(void)
 {
     raise_own_log_levels();
+    boot_streak_begin();
     ESP_LOGI(TAG, "05_dictation starting - offline speech to text");
 
     pmu_init();
@@ -213,8 +256,10 @@ void app_main(void)
     const word_def_t *vocab = k_probe_words;
     size_t vocab_n = PROBE_WORD_COUNT;
 #if CONFIG_DICT_PROBE_SYLLABLES
-    vocab = syllables_table(&vocab_n);
-    ESP_LOGW(TAG, "MX-2: loading %u entries - %s", (unsigned)vocab_n, syllables_kind());
+    if (!s_safe_mode) {
+        vocab = syllables_table(&vocab_n);
+        ESP_LOGW(TAG, "MX-2: loading %u entries - %s", (unsigned)vocab_n, syllables_kind());
+    }
 #endif
 
     s_events = xQueueCreate(8, sizeof(word_event_t));
@@ -226,7 +271,7 @@ void app_main(void)
     ESP_LOGW(TAG, "listening with %u entries; MX-2 is watching whether detections come in a row",
              (unsigned)vocab_n);
 
-#if CONFIG_DICT_PROBE_SYLLABLES
+#if CONFIG_DICT_PROBE_ON_BOOT
     /*
      * MX-2 without a person in the room. recognizer_inject() feeds a clip to the engine
      * exactly as if the microphone heard it, which 02 already uses for its boot
@@ -338,6 +383,10 @@ void app_main(void)
             recognizer_probe_summary();
             s_loop_max_ms = 0;
             s_loop_turns = 0;
+        }
+
+        if (s_boot_streak != 0 && esp_timer_get_time() / 1000 > BOOT_OK_AFTER_MS) {
+            boot_streak_clear();
         }
 
         uint32_t took = (xTaskGetTickCount() - turn_start) * portTICK_PERIOD_MS;
