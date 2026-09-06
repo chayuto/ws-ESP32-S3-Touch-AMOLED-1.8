@@ -92,6 +92,13 @@ static int s_active;
 static bool s_files_ok;   /* card present and the book's files reachable */
 static void build_defs(int slot);
 static void card_arrived(bool at_boot);
+/*
+ * One utterance, one card: the engine can fire twice on a word's tail. 1000 ms
+ * threw away CAT at 0.70 arriving a second after BALL at 0.38 (2026-09-06), so the
+ * window is now 700 ms.
+ */
+#define DEDUPE_MS 700
+
 static QueueHandle_t s_events;
 static uint32_t s_heard;
 static int s_last_word = -1;
@@ -582,8 +589,8 @@ void app_main(void)
         word_event_t ev;
         if (xQueueReceive(s_events, &ev, pdMS_TO_TICKS(250)) == pdTRUE) {
             /* One utterance, one card: the engine can fire twice on a word's tail. */
-            if (last_word_tick && xTaskGetTickCount() - last_word_tick < pdMS_TO_TICKS(1000)) {
-                ESP_LOGI(TAG, "ignored '%s' %.0f%%: within 1 s of the last word", ev.text, ev.prob * 100);
+            if (last_word_tick && xTaskGetTickCount() - last_word_tick < pdMS_TO_TICKS(DEDUPE_MS)) {
+                ESP_LOGI(TAG, "ignored '%s' %.0f%%: within %d ms of the last word", ev.text, ev.prob * 100, DEDUPE_MS);
             } else {
                 on_word(&ev);
                 last_word_tick = xTaskGetTickCount();

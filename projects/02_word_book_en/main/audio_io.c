@@ -15,7 +15,7 @@
 static const char *TAG = "audio_io";
 
 #define SPEAKER_VOLUME CONFIG_WORDBOOK_VOLUME
-#define MIC_GAIN_DB    30.0f
+#define MIC_GAIN_DB    ((float)CONFIG_WORDBOOK_MIC_GAIN_DB)
 
 esp_err_t audio_io_init(audio_io_t *io)
 {

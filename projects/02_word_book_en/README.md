@@ -42,7 +42,7 @@ I (49835) recog: detected [1/1] id=9 'APPLE' prob=0.211  (vad=1 vol=-56.6 dBFS, 
 
 Five for five, but look at the numbers: real speech scores well below the synthesised
 clips, and DOG and APPLE sit *under* the 0.20 floor the self-test had settled on. The
-floor is `CONFIG_WORDBOOK_MIN_PROB_PCT`, now **20** — a noisy room later produced junk
+floor is `CONFIG_WORDBOOK_MIN_PROB_PCT`, now **30** (25 until 2026-09-06: the first battery session showed CAR, the engine's default guess for anything unclear, getting through at 0.27; 30 keeps every CAT, BALL and DOG hit from that session above 0.30) — a noisy room later produced junk
 up to 17 %, so 15 was too close — and above it sits `CONFIG_WORDBOOK_SOUND_PROB_PCT`,
 default **35**: between the two a card is shown silently, at or above it the chime and
 prompt play. A wrong card is cheap; a wrong sound is what makes a toy feel broken. Both
@@ -441,7 +441,7 @@ What that proves:
 What it does **not** prove yet — needs a person at the board:
 
 - That the mic captures **speech** at a usable level. Expect roughly −20 to −10 dBFS
-  peak talking at arm's length; if it's much lower, raise `MIC_GAIN_DB`.
+  peak talking at arm's length; if it's much lower, raise `CONFIG_WORDBOOK_MIC_GAIN_DB`.
 - That the playback is **audible** and clean. The DAC accepted the data at the right
   rate; whether the amp and speaker produced sound was not witnessed.
 
@@ -452,7 +452,7 @@ Tap the screen with someone talking, and both are answered in six seconds.
 | | Value | Why |
 |---|---|---|
 | `SPEAKER_VOLUME` | 90 | The vendor example uses 90 on V2 hardware, 70 on V1 |
-| `MIC_GAIN_DB` | 30 | Starting point; tune from the speech-level test above |
+| `CONFIG_WORDBOOK_MIC_GAIN_DB` | 30 | Adult peaks at -12 dBFS, room at -52 (2026-09-06); a soft child may need 33-36 |
 | Audio task | core 1, priority 5 | Away from LVGL on core 0; the recogniser will share this task |
 
 ## Layout

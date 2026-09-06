@@ -12,7 +12,7 @@ menu "Word book"
     config WORDBOOK_MIN_PROB_PCT
         int "Minimum confidence to show a card (%)"
         range 1 99
-        default 25
+        default 30
         help
             Detections below this are ignored. Digital silence produces a fixed
             junk detection at 13.5%; a lived-in room with 19 words produced 90
@@ -28,6 +28,15 @@ menu "Word book"
             Frames quieter than this are never speech, whatever the VAD model
             thinks. A lived-in room measured -52 dBFS average; a voice at arm's
             length is well above -48. Only applies with the vadnet model.
+
+    config WORDBOOK_MIC_GAIN_DB
+        int "Microphone gain (dB)"
+        range 0 42
+        default 30
+        help
+            ES8311 input PGA gain. At 30 dB an adult at arm's length peaks around
+            -12 dBFS with the room at -52 dBFS (2026-09-06). A soft-spoken child may
+            need 33-36; clipping shows as peaks at 0 dBFS in the "mic:" lines.
 
     config WORDBOOK_SOUND_PROB_PCT
         int "Minimum confidence for the chime and prompt (%)"
