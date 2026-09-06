@@ -15,3 +15,4 @@ attribution kept here as the licences ask. Replace with family photos via `tools
 | BOOK | [A Stack of Books.png](https://commons.wikimedia.org/wiki/File:A_Stack_of_Books.png) | Kasharp | CC BY-SA 4.0 |
 | BIRD | [Erithacus rubecula profile.jpg](https://commons.wikimedia.org/wiki/File:Erithacus_rubecula_profile.jpg) | C-M | CC BY-SA 4.0 |
 | APPLE | [Honeycrisp-Apple.jpg](https://commons.wikimedia.org/wiki/File:Honeycrisp-Apple.jpg) | Evan-Amos | CC0 |
+| BEE | [Honey bee in flight.jpg](https://commons.wikimedia.org/wiki/File:Honey_bee_in_flight.jpg) | Plaksin Alexander | CC BY 4.0 |

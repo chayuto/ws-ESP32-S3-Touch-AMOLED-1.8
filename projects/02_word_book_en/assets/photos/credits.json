@@ -48,7 +48,7 @@
   "stored_px": "960x720"
  },
  "shoe": {
-  "file": "File:Forgotten children's sneakers in R\u00e5g\u00e5rdsdal 1.jpg",
+  "file": "File:Forgotten children's sneakers in Rågårdsdal 1.jpg",
   "page": "https://commons.wikimedia.org/wiki/File:Forgotten_children%27s_sneakers_in_R%C3%A5g%C3%A5rdsdal_1.jpg",
   "license": "CC BY-SA 4.0",
   "artist": "W.carter",
@@ -78,5 +78,13 @@
   "artist": "Kasharp",
   "source_px": "3264x2448",
   "stored_px": "960x720"
+ },
+ "bee": {
+  "file": "File:Honey bee in flight.jpg",
+  "page": "https://commons.wikimedia.org/wiki/File:Honey_bee_in_flight.jpg",
+  "license": "CC BY 4.0",
+  "artist": "Plaksin Alexander",
+  "source_px": "2847x3986",
+  "stored_px": "686x960"
  }
 }

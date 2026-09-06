@@ -133,7 +133,7 @@ happens in each case:
 
 | Situation | Behaviour |
 |---|---|
-| No card at boot | Built-in 19 words (DOG CAT BALL DUCK BABY CAR SHOE BOOK BIRD APPLE, ONE…NINE), text cards, chime. Keeps checking. |
+| No card at boot | Built-in 20 words (DOG CAT BALL DUCK BABY CAR SHOE BOOK BIRD APPLE BEE, ONE…NINE), text cards, chime. Keeps checking. |
 | Card inserted later | `words.json` loaded. Same words as now → photos and prompts become available. Different words → the recogniser's vocabulary is **swapped live**, no reboot; the swap is done by the detect task at a safe point. |
 | Card present but no `book/words.json` | Current words kept; text cards. |
 | Card removed while running | Current words **kept** (the child's words keep working), text cards and chime until it returns. A failed photo or prompt read triggers an immediate re-check rather than waiting for the next poll. |
