@@ -47,6 +47,18 @@ static uint32_t s_probe_results, s_probe_raw_nonempty, s_probe_raw_differs;
 static uint32_t s_probe_calls, s_state_detected, s_state_timeout, s_state_detecting;
 static volatile bool s_hearing; /* last VAD verdict, for the state chip */
 
+/*
+ * MX-2 counters. The question is not "does it recognise" - B1 already showed it does -
+ * it is "does it fire again, and again, while someone keeps talking". So what matters
+ * is the gap between consecutive detections and how many arrive inside one stretch of
+ * speech. One detection per utterance followed by a timeout means B2 is dead too.
+ */
+static int64_t s_mx2_last_det_us;
+static uint32_t s_mx2_runs;        /* stretches of speech that produced >=1 detection */
+static uint32_t s_mx2_in_run;      /* detections inside the current stretch */
+static uint32_t s_mx2_best_run;    /* most detections seen in one stretch */
+static uint32_t s_mx2_gap_min_ms = 0xffffffff, s_mx2_gap_max_ms;
+
 #define RECOG_CORE      1
 #define FEED_PRIO       6   /* above detect so the ring buffer never starves */
 #define DETECT_PRIO     5
@@ -91,6 +103,10 @@ static const word_def_t *volatile s_pending_words;
 static volatile size_t s_pending_count;
 
 static void apply_words(const word_def_t *words, size_t count);
+
+/* MultiNet's documented ceiling, and the compacted accepted-command table. */
+#define MAX_COMMANDS 300
+static word_def_t s_accepted[MAX_COMMANDS];
 
 static volatile bool s_stop;
 static TaskHandle_t s_feed_task, s_detect_task;
@@ -291,6 +307,25 @@ static void detect_task(void *arg)
                 ESP_LOGI(TAG, "detected [%d/%d] id=%d '%s' prob=%.3f  (vad=%d vol=%.1f dBFS, frame %" PRIu32 ")", i + 1,
                          r->num, id, s_words[id].text, r->prob[i], (int)res->vad_state, res->data_volume, frames);
             }
+            if (r->num > 0) {
+                int64_t now = esp_timer_get_time();
+                uint32_t gap_ms = s_mx2_last_det_us ? (uint32_t)((now - s_mx2_last_det_us) / 1000) : 0;
+                /* A gap over the MultiNet timeout means the previous stretch ended. */
+                if (s_mx2_last_det_us == 0 || gap_ms > MN_TIMEOUT_MS) {
+                    s_mx2_runs++;
+                    s_mx2_in_run = 1;
+                } else {
+                    s_mx2_in_run++;
+                    if (gap_ms < s_mx2_gap_min_ms) { s_mx2_gap_min_ms = gap_ms; }
+                    if (gap_ms > s_mx2_gap_max_ms) { s_mx2_gap_max_ms = gap_ms; }
+                }
+                if (s_mx2_in_run > s_mx2_best_run) { s_mx2_best_run = s_mx2_in_run; }
+                s_mx2_last_det_us = now;
+                int id0 = r->command_id[0];
+                ESP_LOGW(TAG, "MX2 +%" PRIu32 " ms  '%s' p=%.3f  (run %" PRIu32 ", #%" PRIu32 " in run)", gap_ms,
+                         (id0 >= 0 && (size_t)id0 < s_word_count) ? s_words[id0].text : "?", r->prob[0], s_mx2_runs,
+                         s_mx2_in_run);
+            }
             bool speech = (res->vad_state == VAD_SPEECH) ||
                           (last_speech_us >= 0 && esp_timer_get_time() - last_speech_us < SPEECH_HOLD_MS * 1000);
             bool valid = r->num > 0 && r->command_id[0] >= 0 && (size_t)r->command_id[0] < s_word_count;
@@ -351,11 +386,18 @@ static void apply_words(const word_def_t *words, size_t count)
 {
     esp_mn_commands_clear();
     size_t loaded = 0;
-    for (size_t i = 0; i < count; i++) {
-        esp_err_t err = esp_mn_commands_add((int)i, words[i].text);
+    /*
+     * Ids must be contiguous over the commands that were ACCEPTED. Numbering by the
+     * input index instead left gaps whenever the engine rejected an entry, and on
+     * 2026-09-07 a list with gaps took esp-sr's FST builder into a LoadProhibited
+     * null deref. s_accepted keeps the id -> text mapping the detect loop needs.
+     */
+    for (size_t i = 0; i < count && loaded < MAX_COMMANDS; i++) {
+        esp_err_t err = esp_mn_commands_add((int)loaded, words[i].text);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "word %u '%s' rejected by G2P/model (%s)", (unsigned)i, words[i].text, esp_err_to_name(err));
         } else {
+            s_accepted[loaded].text = words[i].text;
             loaded++;
         }
     }
@@ -365,8 +407,8 @@ static void apply_words(const word_def_t *words, size_t count)
             ESP_LOGW(TAG, "command not loadable: '%s'", bad->phrases[i]->string);
         }
     }
-    s_words = words;
-    s_word_count = count;
+    s_words = s_accepted;
+    s_word_count = loaded;
     s_mn->print_active_speech_commands(s_mn_data);
     ESP_LOGI(TAG, "vocabulary: %u of %u words loaded", (unsigned)loaded, (unsigned)count);
     const char *texts[BOOK_WORDS_FOR_CLOG];
@@ -419,8 +461,15 @@ esp_err_t recognizer_start(esp_codec_dev_handle_t mic, const word_def_t *words, 
         ESP_LOGI(TAG, "model[%d]: %s", i, s_models->model_name[i]);
     }
 
-    char *mn_name = esp_srmodel_filter(s_models, ESP_MN_PREFIX, ESP_MN_ENGLISH);
-    ESP_RETURN_ON_FALSE(mn_name != NULL, ESP_FAIL, TAG, "no English MultiNet model in partition");
+    /* Language follows the build. 02 hardcoded English here; this project ships both,
+     * and the model in the partition must match what Kconfig says or nothing loads. */
+#if CONFIG_DICT_LANG_CN
+    const char *want_lang = ESP_MN_CHINESE;
+#else
+    const char *want_lang = ESP_MN_ENGLISH;
+#endif
+    char *mn_name = esp_srmodel_filter(s_models, ESP_MN_PREFIX, want_lang);
+    ESP_RETURN_ON_FALSE(mn_name != NULL, ESP_FAIL, TAG, "no '%s' MultiNet model in the partition", want_lang);
     ESP_LOGI(TAG, "multinet model: %s", mn_name);
 
     /* --- AFE: single mic, speech-recognition type, no wake word --- */
@@ -593,6 +642,14 @@ void recognizer_probe_summary(void)
              "probe calls %" PRIu32 ", non-empty %" PRIu32 ", raw_string set %" PRIu32 ", raw differs %" PRIu32,
              s_state_detecting, s_state_detected, s_state_timeout, s_probe_calls, s_probe_results,
              s_probe_raw_nonempty, s_probe_raw_differs);
+    ESP_LOGW(TAG,
+             "MX2 summary: %" PRIu32 " speech runs, best run %" PRIu32 " detections, gaps %" PRIu32 "-%" PRIu32 " ms",
+             s_mx2_runs, s_mx2_best_run, s_mx2_gap_min_ms == 0xffffffff ? 0 : s_mx2_gap_min_ms, s_mx2_gap_max_ms);
+    if (s_mx2_runs > 0 && s_mx2_best_run <= 1) {
+        ESP_LOGW(TAG, "MX2 verdict so far: never more than one detection per stretch -> B2 is dead, MultiNet does not stream");
+    } else if (s_mx2_best_run >= 3) {
+        ESP_LOGW(TAG, "MX2 verdict so far: %" PRIu32 " detections inside one stretch -> B2 STREAMS, this is the path", s_mx2_best_run);
+    }
     if (s_probe_calls == 0) {
         ESP_LOGW(TAG, "MX1: results never read - detect() is not reaching DETECTED or TIMEOUT. Inconclusive, not a verdict.");
     } else if (s_probe_raw_nonempty == 0) {

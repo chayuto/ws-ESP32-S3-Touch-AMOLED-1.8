@@ -38,6 +38,7 @@
 #include "sdcard.h"
 #include "sdkconfig.h"
 #include "sdlog.h"
+#include "syllables.h"
 #include "thermal.h"
 #include "timesync.h"
 
@@ -204,14 +205,59 @@ void app_main(void)
         return;
     }
 
+    /*
+     * MX-2 swaps the vocabulary. The baseline word list proves the engine is alive;
+     * the syllable table asks the real question - whether it fires again and again
+     * through continuous speech, or once per utterance and then times out.
+     */
+    const word_def_t *vocab = k_probe_words;
+    size_t vocab_n = PROBE_WORD_COUNT;
+#if CONFIG_DICT_PROBE_SYLLABLES
+    vocab = syllables_table(&vocab_n);
+    ESP_LOGW(TAG, "MX-2: loading %u entries - %s", (unsigned)vocab_n, syllables_kind());
+#endif
+
     s_events = xQueueCreate(8, sizeof(word_event_t));
-    if (recognizer_start(s_audio.mic, k_probe_words, PROBE_WORD_COUNT, s_events) != ESP_OK) {
+    if (recognizer_start(s_audio.mic, vocab, vocab_n, s_events) != ESP_OK) {
         ESP_LOGE(TAG, "recogniser did not start");
         display_message("recogniser failed", "see the log");
         return;
     }
-    ESP_LOGW(TAG, "listening with %u baseline words; MX-1 is watching raw_string on every result",
-             (unsigned)PROBE_WORD_COUNT);
+    ESP_LOGW(TAG, "listening with %u entries; MX-2 is watching whether detections come in a row",
+             (unsigned)vocab_n);
+
+#if CONFIG_DICT_PROBE_SYLLABLES
+    /*
+     * MX-2 without a person in the room. recognizer_inject() feeds a clip to the engine
+     * exactly as if the microphone heard it, which 02 already uses for its boot
+     * self-test - so this is a proven path on this hardware, not a new one.
+     *
+     * The clip is 4.73 s of continuous speech built only from words in the loaded
+     * table. That length is deliberate: MultiNet's timeout is 5 s, so the whole
+     * sentence lands inside ONE utterance window. If the engine streams, several
+     * detections come back from this single clip. If B2 is dead, exactly one does.
+     *
+     * Injected rather than spoken because it is repeatable - identical input every
+     * run, no room noise, no distance, no microphone gain to argue about.
+     */
+#if CONFIG_DICT_LANG_CN
+    extern const uint8_t clip_start[] asm("_binary_sentence_cn_pcm_start");
+    extern const uint8_t clip_end[] asm("_binary_sentence_cn_pcm_end");
+#else
+    extern const uint8_t clip_start[] asm("_binary_sentence_pcm_start");
+    extern const uint8_t clip_end[] asm("_binary_sentence_pcm_end");
+#endif
+    size_t clip_samples = (size_t)(clip_end - clip_start) / 2;
+    vTaskDelay(pdMS_TO_TICKS(1500)); /* let the front end settle before feeding it */
+    ESP_LOGW(TAG, "MX-2: injecting %.2f s of continuous speech", clip_samples / 16000.0f);
+    recognizer_inject((const int16_t *)clip_start, clip_samples, "sentence");
+    while (recognizer_injecting()) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    vTaskDelay(pdMS_TO_TICKS(2500)); /* let the tail decode and any timeout land */
+    ESP_LOGW(TAG, "MX-2: injection complete, verdict below");
+    recognizer_probe_summary();
+#endif
 
     TickType_t last_beat = xTaskGetTickCount();
     bool was_hearing = false;

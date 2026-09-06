@@ -124,7 +124,47 @@ ESP_MN_BEAM_SEARCH_WITH_FST = 2,
 commands with a 5.0 s timeout, not continuous speech; phoneme→word without a language
 model is error-prone even given clean phonemes; `raw_string` may be empty in FST mode.
 
-### B2 — load syllables, not words
+### B2 — load syllables, not words — **ENGLISH CONTROL RUN 2026-09-07. POSITIVE.**
+
+> **MultiNet streams.** A 4.73 s synthesised sentence, injected through
+> `recognizer_inject()` so the test is repeatable, against the 187-word English
+> control table. MultiNet's timeout is 5 s, so the whole sentence sat inside ONE
+> utterance window:
+>
+> ```
+> MX2 +0 ms     'the'  p=0.182  (run 1, #1 in run)
+> MX2 +579 ms   'and'  p=0.148  (run 1, #2 in run)
+> MX2 +860 ms   'to'   p=0.170  (run 1, #3 in run)
+> MX2 +1124 ms  'it'   p=0.146  (run 1, #4 in run)
+> MX2 +575 ms   'the'  p=0.151  (run 1, #5 in run)
+> MX2 +1061 ms  'the'  p=0.147  (run 1, #6 in run)
+> MX2 summary: 1 speech runs, best run 6 detections, gaps 575-1124 ms
+> ```
+>
+> **Six detections inside one utterance.** The engine does not stop at one command
+> and wait for a timeout - it keeps firing. That was the structural question and it
+> is answered: **B2 is the path.**
+>
+> **The accuracy is bad, and that is the real finding.** The sentence was "the first
+> time we went down to the water and they said it would take three more time to get
+> back home" - roughly 20 words. It returned 6, all function words, with "the" three
+> times, and every confidence between 0.146 and 0.182. All of them fell below the
+> 0.20 floor, so nothing reached the screen. Roughly one word in four, and the ones
+> it caught are the ones that carry no meaning.
+>
+> So the mechanism works and the transcript does not. That is a tuning and
+> language-model problem rather than an architectural one, which is a much better
+> place to be - but it is not a working dictation device, and the gap should not be
+> understated.
+>
+> Caveat: the clip is TTS, not a human. Espressif's own wake words are trained on
+> TTS (`wn9_*_tts`), so it is a fair proxy, but a human voice should be measured
+> before any of these numbers are trusted as a baseline.
+
+**Mandarin run: blocked, not yet answered.** See [Still open](#still-open).
+
+The original reasoning:
+
 
 MultiNet takes commands as **phoneme strings** (`esp_mn_commands_phoneme_add`), several
 phrases may share a `command_id`, and `check_speech_command` reports up front whether a
