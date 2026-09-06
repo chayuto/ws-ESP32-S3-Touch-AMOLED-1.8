@@ -37,6 +37,9 @@ const char *sdlog_aux_path(int ch);
 long sdlog_aux_size(int ch);
 esp_err_t sdlog_aux_truncate(int ch);
 
+/* Lines lost because a ring was full (log and aux rings together), for the run. */
+size_t sdlog_dropped(void);
+
 /* Current file's path and size in bytes (0 if none). */
 const char *sdlog_path(void);
 long sdlog_size(void);

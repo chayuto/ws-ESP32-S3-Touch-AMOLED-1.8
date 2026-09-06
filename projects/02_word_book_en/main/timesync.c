@@ -1,12 +1,14 @@
 #include "timesync.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
 
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "pcf85063.h"
 #include "sdkconfig.h"
 
@@ -19,6 +21,8 @@
 static const char *TAG = "time";
 
 #define VALID_AFTER_YEAR 2025
+
+static timesync_info_t s_info = {.clock = "none"};
 
 static bool clock_is_set(void)
 {
@@ -43,6 +47,18 @@ static void set_clock(const struct tm *t, bool is_utc, const char *source)
     ESP_LOGI(TAG, "clock set from %s: %s", source, timesync_now_str(buf, sizeof(buf)));
 }
 
+static time_t utc_to_time(const struct tm *t)
+{
+    struct tm copy = *t;
+    setenv("TZ", "UTC0", 1);
+    tzset();
+    copy.tm_isdst = -1;
+    time_t secs = mktime(&copy);
+    setenv("TZ", CONFIG_WORDBOOK_TZ, 1);
+    tzset();
+    return secs;
+}
+
 static bool from_rtc(void)
 {
     struct tm t;
@@ -50,6 +66,7 @@ static bool from_rtc(void)
         return false;
     }
     set_clock(&t, true, "RTC");
+    s_info.clock = "rtc";
     return true;
 }
 
@@ -69,6 +86,7 @@ static void from_build_time(void)
     t.tm_mon = p ? (int)(p - names) / 3 : 0;
     t.tm_year -= 1900;
     set_clock(&t, false, "firmware build time (approximate)");
+    s_info.clock = "build";
 }
 
 static void write_rtc_from_clock(void)
@@ -84,7 +102,13 @@ static void write_rtc_from_clock(void)
 #if CONFIG_WORDBOOK_NTP
 static bool from_ntp(void)
 {
+    /* What the RTC says now, so the sync can measure how far it had drifted. */
+    struct tm rtc_tm;
+    bool rtc_ok = pcf85063_get(&rtc_tm) == ESP_OK && rtc_tm.tm_year + 1900 >= VALID_AFTER_YEAR;
+    time_t rtc_secs = rtc_ok ? utc_to_time(&rtc_tm) : 0;
+    int64_t t_start = esp_timer_get_time();
     if (!wifi_sta_join(CONFIG_WORDBOOK_NTP_TIMEOUT_S)) {
+        s_info.ntp_ms = (int)((esp_timer_get_time() - t_start) / 1000);
         return false;
     }
     bool ok = false;
@@ -95,6 +119,14 @@ static bool from_ntp(void)
         tzset();
         char buf[32];
         ESP_LOGI(TAG, "clock set from NTP (%s): %s", CONFIG_WORDBOOK_NTP_SERVER, timesync_now_str(buf, sizeof(buf)));
+        s_info.clock = "ntp";
+        if (rtc_ok) {
+            /* The RTC as it would read now, against the freshly synced clock. */
+            time_t rtc_now = rtc_secs + (time_t)((esp_timer_get_time() - t_start) / 1000000);
+            s_info.rtc_drift_s = (int)(rtc_now - time(NULL));
+            s_info.drift_known = true;
+            ESP_LOGI(TAG, "RTC was %d s %s of NTP", abs(s_info.rtc_drift_s), s_info.rtc_drift_s >= 0 ? "ahead" : "behind");
+        }
         write_rtc_from_clock();
         ok = true;
     } else {
@@ -102,6 +134,7 @@ static bool from_ntp(void)
     }
     esp_netif_sntp_deinit();
     wifi_sta_leave(); /* the rest of boot never needs the radio */
+    s_info.ntp_ms = (int)((esp_timer_get_time() - t_start) / 1000);
     return ok;
 }
 #endif
@@ -111,6 +144,7 @@ void timesync_at_boot(void)
     if (pcf85063_init() != ESP_OK) {
         ESP_LOGW(TAG, "RTC not answering");
     }
+    s_info.rtc_valid = !pcf85063_was_stopped();
     setenv("TZ", CONFIG_WORDBOOK_TZ, 1);
     tzset();
 #if CONFIG_WORDBOOK_NTP
@@ -138,4 +172,9 @@ const char *timesync_now_str(char *buf, size_t len)
     localtime_r(&now, &t);
     strftime(buf, len, "%Y-%m-%d %H:%M:%S", &t);
     return buf;
+}
+
+void timesync_info(timesync_info_t *out)
+{
+    *out = s_info;
 }

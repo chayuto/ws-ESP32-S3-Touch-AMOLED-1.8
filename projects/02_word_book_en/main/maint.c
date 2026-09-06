@@ -8,6 +8,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "cJSON.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -191,6 +192,43 @@ static esp_err_t h_metrics(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "chip_c", ts.chip_c);
     cJSON_AddNumberToObject(o, "pmu_c", ts.pmu_c);
     cJSON_AddStringToObject(o, "thermal", thermal_level_name(ts.level));
+    /* The health numbers the state record carries, live. */
+    cJSON_AddBoolToObject(o, "host", usb_serial_jtag_is_connected());
+    uint8_t irq[3];
+    pmu_irq_status(irq);
+    char irq_txt[8];
+    snprintf(irq_txt, sizeof(irq_txt), "%02x%02x%02x", irq[0], irq[1], irq[2]);
+    cJSON_AddStringToObject(o, "pmu_irq", irq_txt);
+    cJSON_AddNumberToObject(o, "internal_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(o, "psram_min_free", heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+    uint32_t card_mb = 0, card_free_mb = 0;
+    sdcard_space(&card_mb, &card_free_mb);
+    cJSON_AddNumberToObject(o, "card_mb", card_mb);
+    cJSON_AddNumberToObject(o, "card_free_mb", card_free_mb);
+    cJSON_AddNumberToObject(o, "log_dropped", (double)sdlog_dropped());
+    cJSON_AddNumberToObject(o, "io_errors", sdcard_io_errors());
+    cJSON_AddNumberToObject(o, "loop_max_ms", st.loop_max_ms);
+    cJSON_AddNumberToObject(o, "loop_turns", st.loop_turns);
+    recognizer_health_t h;
+    recognizer_health(&h, false);
+    cJSON *afe = cJSON_AddObjectToObject(o, "afe");
+    cJSON_AddNumberToObject(afe, "frames", h.frames);
+    cJSON_AddNumberToObject(afe, "timeouts", h.fetch_timeouts);
+    cJSON_AddNumberToObject(afe, "mic_err", h.mic_errors);
+    cJSON_AddNumberToObject(afe, "q_drops", h.queue_drops);
+    cJSON_AddNumberToObject(afe, "rb_min", h.rb_min);
+    cJSON_AddNumberToObject(afe, "rb_max", h.rb_max);
+    cJSON_AddNumberToObject(afe, "gap_max_ms", h.gap_max_ms);
+    cJSON_AddNumberToObject(afe, "detect_max_ms", h.detect_max_ms);
+    if (st.stack_json[0]) {
+        cJSON_AddRawToObject(o, "stack", st.stack_json);
+    }
+    int rssi = 0, chan = 0;
+    if (wifi_sta_signal(&rssi, &chan)) {
+        cJSON_AddNumberToObject(o, "rssi", rssi);
+        cJSON_AddNumberToObject(o, "channel", chan);
+    }
+    cJSON_AddNumberToObject(o, "join_ms", wifi_sta_join_ms());
     cJSON_AddNumberToObject(o, "min_prob_pct", CONFIG_WORDBOOK_MIN_PROB_PCT);
     cJSON_AddNumberToObject(o, "sound_prob_pct", CONFIG_WORDBOOK_SOUND_PROB_PCT);
     return send_json(req, o);

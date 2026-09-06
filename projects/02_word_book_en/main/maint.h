@@ -20,6 +20,9 @@ typedef struct {
     float last_prob;
     int words;
     bool files_ok;
+    uint32_t loop_max_ms;  /* longest main-loop turn since the last state record */
+    uint32_t loop_turns;
+    char stack_json[160];  /* {"main":bytes,...} headroom per task, -1 when not running */
 } maint_app_state_t;
 
 /* The app fills this on request so metrics reflect the live state. */

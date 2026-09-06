@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /*
  * The card can be absent at boot, inserted later, or yanked mid-use. There is
@@ -18,3 +19,9 @@ bool sdcard_present(void);
 
 /* A file operation failed. Re-check the card now instead of at the next poll. */
 void sdcard_report_io_error(void);
+
+/* How often that was reported, for the run. */
+uint32_t sdcard_io_errors(void);
+
+/* Size and free space read once at mount (a FAT scan can take a moment); 0 without a card. */
+void sdcard_space(uint32_t *total_mb, uint32_t *free_mb);

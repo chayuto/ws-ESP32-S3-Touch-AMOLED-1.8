@@ -34,6 +34,9 @@ static FILE *s_file;
 static SemaphoreHandle_t s_file_mutex;
 static char s_path[96];
 static size_t s_written;
+/* Size at open, so the size queries need no stat(): one on the card costs tens of ms,
+ * and the state record asks for three of them every 30 s. */
+static long s_size_base;
 
 /* Aux channels: own rings, same drain task and mutex. */
 #define AUX_RING_BYTES (32 * 1024)
@@ -41,6 +44,7 @@ typedef struct {
     char *ring;
     volatile size_t head, tail;
     size_t dropped, written;
+    long size_base;
     FILE *file;
     char path[96];
 } aux_t;
@@ -224,6 +228,8 @@ esp_err_t sdlog_open(const char *path)
         return ESP_FAIL;
     }
     strlcpy(s_path, path, sizeof(s_path));
+    s_size_base = (stat(path, &st) == 0) ? (long)st.st_size : 0; /* the only stat of this file's life */
+    s_written = 0;
     const esp_app_desc_t *app = esp_app_get_description();
     char now[32];
     fprintf(f, "\n===== boot: %s %s (IDF %s), reset reason %d, uptime %lld ms, time %s, ring dropped %u =====\n",
@@ -260,8 +266,8 @@ const char *sdlog_path(void)
 
 long sdlog_size(void)
 {
-    struct stat st;
-    return (s_path[0] && stat(s_path, &st) == 0) ? (long)st.st_size : 0;
+    /* Tracked, not stat()ed: size at open plus what the drain task has written since. */
+    return s_file ? s_size_base + (long)s_written : 0; /* 0 with no file open, as before */
 }
 
 esp_err_t sdlog_truncate(void)
@@ -315,6 +321,9 @@ esp_err_t sdlog_aux_open(int ch, const char *path)
         return ESP_FAIL;
     }
     strlcpy(x->path, path, sizeof(x->path));
+    struct stat st;
+    x->size_base = (stat(path, &st) == 0) ? (long)st.st_size : 0;
+    x->written = 0;
     x->file = f;
     xSemaphoreGive(s_file_mutex);
     ESP_LOGI(TAG, "appending records to %s", path);
@@ -357,9 +366,10 @@ const char *sdlog_aux_path(int ch)
 
 long sdlog_aux_size(int ch)
 {
-    struct stat st;
-    const char *p = sdlog_aux_path(ch);
-    return (p[0] && stat(p, &st) == 0) ? (long)st.st_size : 0;
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS) {
+        return 0;
+    }
+    return s_aux[ch].file ? s_aux[ch].size_base + (long)s_aux[ch].written : 0;
 }
 
 esp_err_t sdlog_aux_truncate(int ch)
@@ -376,4 +386,13 @@ esp_err_t sdlog_aux_truncate(int ch)
     snprintf(old, sizeof(old), "%s.1", path);
     unlink(old);
     return sdlog_aux_open(ch, path);
+}
+
+size_t sdlog_dropped(void)
+{
+    size_t n = s_dropped;
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        n += s_aux[c].dropped;
+    }
+    return n;
 }

@@ -327,6 +327,12 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
   Anything that heats the board (a new rail, a charge-current change) must be checked
   against `pmu_c` in the state records, and a real trip leaves `last_trip` in the boot
   record and `pmu_off_src` `software`.
+- **The state record is the board's own account of itself.** Besides power and the
+  recogniser it now carries audio-path health (frames, timeouts, mic errors, queue drops,
+  ring-buffer free fraction, worst frame gap, worst MultiNet call), the worst main-loop
+  turn, per-task stack headroom, heap shape, card free space, log drops, whether a host
+  is on the USB cable, and the PMU's latched interrupt bytes. Before blaming a missed
+  word on the model or the microphone, read those.
 - **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
   backup before any flash that you cannot otherwise undo.
 

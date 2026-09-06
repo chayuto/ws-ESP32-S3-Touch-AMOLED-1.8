@@ -88,6 +88,11 @@ means warm to a hand.
 
 ## Ranked: what else, cheaply
 
+### Tier A: built 2026-09-06 (all ten)
+
+Shipped in one round on the user's go; the table below is what each one turned out to
+cost and say. First readings from the 14:52 boot are in the README's state-record section.
+
 ### Tier A: free and safe, one round, no new hardware touched
 
 | # | Item | Fields | What it answers | Cost |
@@ -103,9 +108,25 @@ means warm to a hand.
 | 9 | RTC quality in the boot record: oscillator-stop flag (already logged as text) and RTC-vs-NTP delta at the boot sync | `rtc_valid`, `rtc_drift_s` | Does the PCF85063 hold time through a power loss, and how well | 0 |
 | 10 | Card free space once per mount (`esp_vfs_fat_info`; FSINFO is trusted, `CONFIG_FATFS_DONT_TRUST_FREE_CLUSTER_CNT=0`, so usually fast; a stale FSINFO scans the FAT, which is why it is never periodic) | `card_free_mb` in the `card_in`/`boot` record | When will the log rotation matter | once |
 
-Together: about +170 bytes per state record (333 today), under 1 ms more on the bus,
-buffer 768 → 1024. State file growth ~1.0 → ~1.5 MB per day awake; rotation stays at
-4 MB on open.
+Measured after the fact: a state record went from 333 to about 960 bytes (buffer 768 ->
+1280), the boot record to about 440 (buffer 960). The state file grows roughly 2.8 MB a
+day awake, and rotation still happens at 4 MB on open. No new task, no new timer: the
+audio counters are written by the detect and feed tasks that already run, the loop timer
+is two `esp_timer_get_time()` calls a turn, and the card's free space is read once per
+mount (0 ms on this card, FSINFO trusted).
+
+The loop timer paid for itself immediately: the recurring 47 ms turn it exposed was the
+record write, and the cause was `sdlog_size()` and `sdlog_aux_size()` doing a `stat()` on
+the SD card for each of the three files. Both now return the size the drain task already
+tracks, `stat`ing once when a file is opened, and the record turn dropped to 7 ms. The
+same measurement priced two other things: rendering a word card is 66 ms, and entering
+maintenance mode blocks the loop for 9 s while Wi-Fi joins on the main task (button
+presses during it are latched by the 10 ms sampler, so nothing is lost).
+
+Two design notes worth keeping. `ringbuff_free_pct` is logged exactly as the front end
+reports it, because which direction means "busy" is a claim about someone else's library
+that the records can settle. And the main-loop figure times the work in a turn, not the
+wait on the word queue, which would otherwise read 250 ms every idle turn.
 
 ### Tier B: needs a go, a config change or a new device on the bus
 

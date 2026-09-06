@@ -4,6 +4,7 @@
 
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -12,6 +13,7 @@
 #include "sdkconfig.h"
 
 static const char *TAG = "wifi";
+static int s_join_ms;
 
 static EventGroupHandle_t s_ev;
 static esp_netif_t *s_netif;
@@ -68,11 +70,15 @@ bool wifi_sta_join(int timeout_s)
     xEventGroupClearBits(s_ev, GOT_IP | FAILED);
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "joining '%s' (up to %d s)...", CONFIG_WORDBOOK_WIFI_SSID, timeout_s);
+    int64_t t0 = esp_timer_get_time();
     EventBits_t bits = xEventGroupWaitBits(s_ev, GOT_IP | FAILED, pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_s * 1000));
+    s_join_ms = (int)((esp_timer_get_time() - t0) / 1000);
     if (bits & GOT_IP) {
         s_up = true;
         esp_wifi_set_ps(WIFI_PS_NONE); /* we serve requests; a dozing station drops them */
-        ESP_LOGI(TAG, "joined, ip %s", s_ip);
+        int rssi = 0, chan = 0;
+        wifi_sta_signal(&rssi, &chan);
+        ESP_LOGI(TAG, "joined in %d ms, ip %s, rssi %d dBm, channel %d", s_join_ms, s_ip, rssi, chan);
         return true;
     }
     ESP_LOGW(TAG, "'%s' not joined (%s)", CONFIG_WORDBOOK_WIFI_SSID, (bits & FAILED) ? "rejected or not found" : "timeout");
@@ -99,4 +105,20 @@ void wifi_sta_leave(void)
     s_up = false;
     s_ip[0] = '\0';
     ESP_LOGI(TAG, "off");
+}
+
+bool wifi_sta_signal(int *rssi, int *channel)
+{
+    wifi_ap_record_t ap;
+    if (!s_up || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return false;
+    }
+    if (rssi) *rssi = ap.rssi;
+    if (channel) *channel = ap.primary;
+    return true;
+}
+
+int wifi_sta_join_ms(void)
+{
+    return s_join_ms;
 }

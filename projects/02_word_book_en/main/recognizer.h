@@ -63,5 +63,22 @@ void recognizer_set_words(const word_def_t *words, size_t count);
 /* Tear everything down: tasks, MultiNet, the AFE, the model list. Frees ~35 KB internal. */
 void recognizer_stop(void);
 
+/*
+ * How the audio path is keeping up. Counters are cumulative for the run; the window
+ * extremes (rb_*, *_max_ms) cover the time since the last call with `reset` true.
+ * ringbuff_free_pct is the AFE's own figure, 0..1, logged as given: which way "busy" goes
+ * is learned from the records, not assumed.
+ */
+typedef struct {
+    uint32_t frames;         /* AFE frames fetched (31.25 per second when all is well) */
+    uint32_t fetch_timeouts; /* nothing from the AFE within 200 ms */
+    uint32_t mic_errors;     /* codec read failures */
+    uint32_t queue_drops;    /* words lost because the app's queue was full */
+    float rb_min, rb_max;    /* ringbuff_free_pct extremes; -1 when no frame was seen */
+    uint32_t gap_max_ms;     /* longest wait between two fetched frames */
+    uint32_t detect_max_ms;  /* longest MultiNet detect() call */
+} recognizer_health_t;
+void recognizer_health(recognizer_health_t *out, bool reset);
+
 /* The engine's last 5-second ambient summary, for metrics. */
 void recognizer_mic_level(float *avg_dbfs, float *peak_dbfs, int *speech_pct);

@@ -238,7 +238,7 @@ brightness, sleep and maintenance flags, heap current and minimum, PSRAM, card /
 log, word count, heard count with the last word and its confidence, the two die
 temperatures (`chip_c` the ESP32-S3, `pmu_c` the AXP2101; -999 = no reading) with the
 thermal level (`ok`, `warm`, `hot`, `trip`; see Temperature, below), mic level and speech
-percentage, uptime and real time. Thermal level changes are events too
+percentage, uptime and real time, and a health block (see below). Thermal level changes are events too
 (`thermal_warm`, `thermal_hot`, `thermal_trip`, `thermal_ok`). From the page: last 100,
 download, clear; API `GET /api/state[?tail=N]`, `DELETE /api/state`.
 
@@ -257,11 +257,48 @@ Since the thermal guard: the die temperatures at boot, the charger as configured
 (`chg_ma` charge current, `chg_mv` target, `in_ma` input limit, `treg_c` the PMU's own
 thermal throttle line), how many thermal trips this board has ever made and the last one
 (`last_trip`: time, uptime and both dies at the moment it powered off, or `null`). A trip
-also shows as `pmu_off_src` `software` on the next boot.
+also shows as `pmu_off_src` `software` on the next boot. It also carries the clock's
+story (`clock` the source that won, `rtc_valid` false if the RTC oscillator had stopped,
+`rtc_drift_s` how far the RTC was ahead of NTP, `ntp_ms` what that path cost), the PMU's
+latched interrupt bytes, the battery thermistor reading (`ts_raw`; railed at about 16,366
+means no thermistor is fitted on this board), the gauge's low-battery warning levels, and
+the card's size and free space.
 
 ```
 {"t":"boot","time":"2026-09-06 14:21:45","up_s":5,"reset":"poweron","rtc_ram":"lost","pmu_on":"04","pmu_on_src":"vbus_insert","pmu_off":"01","pmu_off_src":"pwr_key_held","crash_streak":0,"chip_c":30.7,"pmu_c":34.8,"chg_ma":200,"chg_mv":4200,"in_ma":1500,"treg_c":60,"trips":0,"last_trip":null}
 ```
+
+The health fields, added 2026-09-06 so that "it missed a word" has evidence behind it:
+
+| Field | Means |
+|---|---|
+| `afe.frames` / `timeouts` / `mic_err` | Audio frames fetched (31.25 a second when healthy), fetches that found nothing in 200 ms, codec read failures. All cumulative for the run |
+| `afe.q_drops` | Recognised words the app's queue could not take |
+| `afe.rb_min` / `rb_max` | The front end's own ring-buffer free fraction over the window, 0 to 1. 0.98 and up is idle; a low figure means audio was backing up |
+| `afe.gap_max_ms` | Longest gap between two audio frames in the window (32 ms is normal) |
+| `afe.detect_max_ms` | Longest MultiNet call in the window, against the 32 ms frame it has to fit in |
+| `loop_max_ms`, `loop_max_what`, `loop_turns` | Longest main-loop turn's work in the window, what that turn was doing (`word`, `button`, `command`, `tap`, `card`, `dim`, `sleep`, `usb`, `record`, `idle`) and how many turns. Button latency and word dedupe both depend on this. The wait on the word queue is not counted, only the work |
+| `stack` | Bytes of stack headroom left in each task that matters (`main`, `feed`, `detect`, `lvgl`, `sdlog`, `devcmd`, `timer`); -1 when that task is not running. An overflow is a silent panic, so it is worth watching the trend |
+| `internal_largest`, `psram_min` | The heap's shape: the biggest contiguous internal block (waking the recogniser needs about 37 KB) and the PSRAM low-water mark |
+| `card_mb`, `card_free_mb` | Read once per mount, never periodically: with a stale FSINFO that query walks the whole FAT |
+| `log_dropped`, `io_errors`, `state_bytes`, `clog_bytes` | Records lost before the card, card errors reported, and how big the two record files are |
+| `host` | 1 when a computer is on the USB cable, 0 on a wall charger. Explains missing console lines |
+| `pmu_irq` | Three AXP2101 interrupt-status bytes, read and never cleared, so they latch everything since the PMU last lost power: PWR presses, USB in/out, charge start and done, gauge warnings, die over-temperature |
+| `rssi`, `chan`, `join_ms` | Wi-Fi signal and how long the last join took; only meaningful in maintenance mode |
+
+First numbers on this board, 2026-09-06:
+
+| Longest turn | Doing what |
+|---|---|
+| 66 ms | `word`: rendering a card, photo decoded from the card |
+| 7 ms | `record`: writing a state record (was 47 ms until the file sizes stopped being `stat`ed on the card) |
+| 9,009 ms | `command`: entering maintenance mode, which joins Wi-Fi on the main task. Presses during it are latched by the button timer and handled afterwards |
+
+MultiNet's worst call was 18-28 ms of the 32 ms frame it has to fit in, so the recogniser
+runs with roughly a tenth to a half of the frame to spare. The audio ring buffer never
+dropped below 0.96 free, with no timeouts, no mic errors and no dropped words. Stack
+headroom: main 3,988 of 8,192 bytes, detect 5,468 of 8,192, LVGL 3,304 of 7,168. Card
+13,498 of 15,174 MB free. Wi-Fi joined in about 5 s at -52 dBm.
 
 Background: the screen was reported dark several times. Every case in the card log was
 a sleep (BOOT on a lit screen), a dim (12 % / 35 % on a near-black card) or a second press

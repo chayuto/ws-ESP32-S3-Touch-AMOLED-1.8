@@ -68,6 +68,20 @@ int pmu_charge_target_mv(void);
 int pmu_thermal_reg_c(void);
 void pmu_charger_text(char *buf, size_t n);
 
+/*
+ * Read-only extras for the records. IRQ status REG 48/49/4A, three bytes, read and never
+ * cleared, so they latch everything since the PMU last lost power: PWR short/long press
+ * (49 bits 3/2), VBUS in/out (49 bits 7/6), charge start/done (4A bits 3/4), gauge
+ * warning levels (48 bits 7/6), die over-temperature (4A bit 2), safety timer (4A bit 1).
+ */
+void pmu_irq_status(uint8_t out[3]);
+
+/* The TS pin ADC, raw (REG 36/37); tells whether a battery thermistor is there. -1 on error. */
+int pmu_ts_raw(void);
+
+/* Gauge low-battery warning levels, percent (REG 1A): level 1 and level 2. */
+void pmu_low_batt_levels(int *lvl1_pct, int *lvl2_pct);
+
 /* Soft power-off (REG 10 bit 0): every rail off, the PMU waits for PWR or a USB insert. Does not return on success. */
 esp_err_t pmu_power_off(void);
 

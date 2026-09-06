@@ -89,6 +89,11 @@ static int s_mic_speech;
 static word_event_t s_raw;
 static volatile bool s_raw_valid;
 
+/* Health: cumulative counters and window extremes, written by the audio tasks, read by the app. */
+static volatile uint32_t s_h_frames, s_h_timeouts, s_h_mic_errors, s_h_queue_drops;
+static volatile float s_h_rb_min = 2, s_h_rb_max = -1;
+static volatile int64_t s_h_gap_max_us, s_h_detect_max_us, s_h_last_fetch_us;
+
 static void feed_task(void *arg)
 {
     (void)arg;
@@ -124,6 +129,7 @@ static void feed_task(void *arg)
         } else {
             int ret = esp_codec_dev_read(s_mic, buf, (int)bytes);
             if (ret != ESP_CODEC_DEV_OK) {
+                s_h_mic_errors++;
                 ESP_LOGE(TAG, "mic read failed: %d", ret);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
@@ -159,10 +165,19 @@ static void detect_task(void *arg)
     while (!s_stop) {
         afe_fetch_result_t *res = s_afe->fetch_with_delay(s_afe_data, pdMS_TO_TICKS(200));
         if (res == NULL || res->ret_value == ESP_FAIL) {
+            s_h_timeouts++;
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
         frames++;
+        int64_t now_us = esp_timer_get_time();
+        if (s_h_last_fetch_us && now_us - s_h_last_fetch_us > s_h_gap_max_us) {
+            s_h_gap_max_us = now_us - s_h_last_fetch_us;
+        }
+        s_h_last_fetch_us = now_us;
+        s_h_frames++;
+        if (res->ringbuff_free_pct < s_h_rb_min) s_h_rb_min = res->ringbuff_free_pct;
+        if (res->ringbuff_free_pct > s_h_rb_max) s_h_rb_max = res->ringbuff_free_pct;
         if (res->vad_state == VAD_SPEECH) {
             last_speech_us = esp_timer_get_time();
         }
@@ -200,7 +215,12 @@ static void detect_task(void *arg)
             continue; /* frames fed before the pause landed; drop them */
         }
 
+        int64_t det_us = esp_timer_get_time();
         esp_mn_state_t state = s_mn->detect(s_mn_data, res->data);
+        det_us = esp_timer_get_time() - det_us;
+        if (det_us > s_h_detect_max_us) {
+            s_h_detect_max_us = det_us;
+        }
         if (state == ESP_MN_STATE_DETECTED) {
             esp_mn_results_t *r = s_mn->get_results(s_mn_data);
             for (int i = 0; i < r->num; i++) {
@@ -243,6 +263,7 @@ static void detect_task(void *arg)
                 word_event_t ev = {.id = r->command_id[0], .prob = r->prob[0],
                                    .text = ((size_t)r->command_id[0] < s_word_count) ? s_words[r->command_id[0]].text : "?"};
                 if (xQueueSend(s_out, &ev, 0) != pdTRUE) {
+                    s_h_queue_drops++;
                     ESP_LOGW(TAG, "event queue full, dropped '%s'", ev.text);
                 }
             } else if (valid) {
@@ -292,6 +313,7 @@ static void apply_words(const word_def_t *words, size_t count)
 
 static void start_tasks(void)
 {
+    s_h_last_fetch_us = 0; /* a sleep is not a gap */
     s_stop = false;
     s_paused = false;
     s_flush = false;
@@ -478,4 +500,22 @@ void recognizer_mic_level(float *avg_dbfs, float *peak_dbfs, int *speech_pct)
     if (avg_dbfs) *avg_dbfs = s_mic_avg;
     if (peak_dbfs) *peak_dbfs = s_mic_peak;
     if (speech_pct) *speech_pct = s_mic_speech;
+}
+
+void recognizer_health(recognizer_health_t *out, bool reset)
+{
+    out->frames = s_h_frames;
+    out->fetch_timeouts = s_h_timeouts;
+    out->mic_errors = s_h_mic_errors;
+    out->queue_drops = s_h_queue_drops;
+    out->rb_min = s_h_rb_max < 0 ? -1 : s_h_rb_min;
+    out->rb_max = s_h_rb_max;
+    out->gap_max_ms = (uint32_t)(s_h_gap_max_us / 1000);
+    out->detect_max_ms = (uint32_t)(s_h_detect_max_us / 1000);
+    if (reset) {
+        s_h_rb_min = 2;
+        s_h_rb_max = -1;
+        s_h_gap_max_us = 0;
+        s_h_detect_max_us = 0;
+    }
 }

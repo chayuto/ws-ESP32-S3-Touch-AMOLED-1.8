@@ -21,6 +21,7 @@
 #include "bsp/esp-bsp.h"
 #include "cards.h"
 #include "devcmd.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
 #include "esp_log.h"
@@ -40,6 +41,7 @@
 #include "sdlog.h"
 #include "thermal.h"
 #include "timesync.h"
+#include "wifi_sta.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "wordbook";
@@ -110,6 +112,32 @@ static SemaphoreHandle_t s_tap;
 /* The thermal guard's last sample; thermal_step() refreshes it every loop turn. */
 static thermal_status_t s_thermal;
 
+/* Main-loop health: the longest turn's work (wait excluded) since the last state record,
+ * and what that turn was doing, because "387 ms" on its own answers nothing. */
+static int64_t s_loop_work_start, s_loop_max_us;
+static uint32_t s_loop_turns;
+static const char *s_loop_label = "idle", *s_loop_max_label = "idle";
+
+/* Stack headroom of the tasks that matter, as one JSON object; -1 = not running. */
+static const struct { const char *task, *key; } s_stack_tasks[] = {
+    {"main", "main"},     {"sr_feed", "feed"}, {"sr_detect", "detect"}, {"taskLVGL", "lvgl"},
+    {"sdlog", "sdlog"},   {"devcmd", "devcmd"}, {"esp_timer", "timer"},
+};
+
+static void stack_json(char *buf, size_t n)
+{
+    size_t len = 0;
+    len += snprintf(buf + len, n - len, "{");
+    for (size_t i = 0; i < sizeof(s_stack_tasks) / sizeof(s_stack_tasks[0]) && len < n; i++) {
+        TaskHandle_t h = xTaskGetHandle(s_stack_tasks[i].task);
+        len += snprintf(buf + len, n - len, "%s\"%s\":%d", i ? "," : "", s_stack_tasks[i].key,
+                        h ? (int)uxTaskGetStackHighWaterMark(h) : -1);
+    }
+    if (len < n) {
+        snprintf(buf + len, n - len, "}");
+    }
+}
+
 /* A reading that is not there prints as -999, which no die ever reads; "nan" is not JSON. */
 static float jnum(float v)
 {
@@ -138,6 +166,7 @@ static void wake_screen(void)
 static void maybe_dim(void)
 {
     if (!s_dimmed && xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_DIM_AFTER_S * 1000)) {
+        s_loop_label = "dim";
         s_dimmed = true;
         esp_err_t err = bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
         ESP_LOGI(TAG, "screen: dim %d%% after %d s quiet (write %s)", CONFIG_WORDBOOK_DIM_BRIGHTNESS, CONFIG_WORDBOOK_DIM_AFTER_S,
@@ -162,6 +191,9 @@ static bool s_asleep;
 
 static void state_record(const char *event)
 {
+    if (s_loop_label == NULL || s_loop_label[0] == 'i') {
+        s_loop_label = "record"; /* an otherwise idle turn that stopped to write a record */
+    }
     pmu_status_t ps = {0};
     pmu_read(&ps);
     uint8_t dc = 0, l0 = 0, l1 = 0;
@@ -170,7 +202,22 @@ static void state_record(const char *event)
     int speech = 0;
     recognizer_mic_level(&mic_avg, &mic_peak, &speech);
     static const char *const chg_names[] = {"tri", "pre", "cc", "cv", "done", "idle", "?", "?"};
-    char now[32], buf[768];
+    /* Health: the audio path, the loop, the heap's shape, the tasks' stacks, the card and the log. */
+    recognizer_health_t h;
+    recognizer_health(&h, true);
+    unsigned loop_max_ms = (unsigned)(s_loop_max_us / 1000);
+    const char *loop_max_what = s_loop_max_label;
+    s_loop_max_us = 0;
+    s_loop_max_label = "idle";
+    char stacks[160];
+    stack_json(stacks, sizeof(stacks));
+    uint8_t irq[3];
+    pmu_irq_status(irq);
+    uint32_t card_mb = 0, card_free_mb = 0;
+    sdcard_space(&card_mb, &card_free_mb);
+    int rssi = 0, chan = 0;
+    wifi_sta_signal(&rssi, &chan);
+    char now[32], buf[1280];
     snprintf(buf, sizeof(buf),
              "{\"t\":\"state\",\"time\":\"%s\",\"up_s\":%lld,\"event\":\"%s\","
              "\"usb\":%d,\"vbus_mv\":%u,\"battery\":%d,\"vbat_mv\":%u,\"pct\":%u,\"vsys_mv\":%u,\"charging\":%d,\"chg\":\"%s\","
@@ -180,7 +227,13 @@ static void state_record(const char *event)
              "\"card\":%d,\"files\":%d,\"log\":%d,\"log_bytes\":%ld,"
              "\"words\":%u,\"heard\":%lu,\"last\":\"%s\",\"last_p\":%.2f,"
              "\"chip_c\":%.1f,\"pmu_c\":%.1f,\"thermal\":\"%s\","
-             "\"mic_avg\":%.1f,\"mic_peak\":%.1f,\"speech_pct\":%d}",
+             "\"mic_avg\":%.1f,\"mic_peak\":%.1f,\"speech_pct\":%d,"
+             "\"host\":%d,\"pmu_irq\":\"%02x%02x%02x\",\"internal_largest\":%u,\"psram_min\":%u,"
+             "\"card_mb\":%" PRIu32 ",\"card_free_mb\":%" PRIu32 ",\"log_dropped\":%u,\"io_errors\":%" PRIu32 ","
+             "\"state_bytes\":%ld,\"clog_bytes\":%ld,\"loop_max_ms\":%u,\"loop_max_what\":\"%s\",\"loop_turns\":%" PRIu32 ","
+             "\"afe\":{\"frames\":%" PRIu32 ",\"timeouts\":%" PRIu32 ",\"mic_err\":%" PRIu32 ",\"q_drops\":%" PRIu32 ","
+             "\"rb_min\":%.2f,\"rb_max\":%.2f,\"gap_max_ms\":%" PRIu32 ",\"detect_max_ms\":%" PRIu32 "},"
+             "\"stack\":%s,\"rssi\":%d,\"chan\":%d,\"join_ms\":%d}",
              timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000000), event,
              ps.vbus_in, ps.vbus_mv, ps.batt_present, ps.vbat_mv, ps.batt_pct, ps.vsys_mv, ps.charging, chg_names[ps.chg_state & 7],
              dc, l0, l1,
@@ -190,7 +243,12 @@ static void state_record(const char *event)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              sdcard_present(), s_files_ok, sdlog_active(), sdlog_size(),
              (unsigned)s_book.count, (unsigned long)s_heard, s_last_word_text ? s_last_word_text : "", s_last_prob,
-             jnum(s_thermal.chip_c), jnum(s_thermal.pmu_c), thermal_level_name(s_thermal.level), mic_avg, mic_peak, speech);
+             jnum(s_thermal.chip_c), jnum(s_thermal.pmu_c), thermal_level_name(s_thermal.level), mic_avg, mic_peak, speech,
+             usb_serial_jtag_is_connected(), irq[0], irq[1], irq[2], (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM), card_mb, card_free_mb, (unsigned)sdlog_dropped(),
+             sdcard_io_errors(), sdlog_aux_size(1), sdlog_aux_size(0), loop_max_ms, loop_max_what, s_loop_turns, h.frames, h.fetch_timeouts,
+             h.mic_errors, h.queue_drops, h.rb_min, h.rb_max, h.gap_max_ms, h.detect_max_ms, stacks, rssi, chan,
+             wifi_sta_join_ms());
     sdlog_aux_write(1, buf);
 }
 
@@ -251,6 +309,9 @@ static void maint_state(maint_app_state_t *out)
     out->last_prob = s_last_prob;
     out->words = (int)s_book.count;
     out->files_ok = s_files_ok;
+    out->loop_max_ms = (uint32_t)(s_loop_max_us / 1000);
+    out->loop_turns = s_loop_turns;
+    stack_json(out->stack_json, sizeof(out->stack_json));
 }
 
 static void enter_maint(void)
@@ -707,15 +768,35 @@ static void boot_record(void)
     }
     ESP_LOGI(TAG, "boot: chip %.1f C, PMU %.1f C; %s; thermal trips ever %" PRIu32 "%s", s_thermal.chip_c, s_thermal.pmu_c, chg_txt,
              trip.count, off & 0x02 ? " (the PMU says the last power-off was by software: our trip)" : "");
-    char now[32], buf[640];
+    /* The clock's story, the PMU's latched history and the card's room. */
+    timesync_info_t ti;
+    timesync_info(&ti);
+    char drift[16] = "null";
+    if (ti.drift_known) {
+        snprintf(drift, sizeof(drift), "%d", ti.rtc_drift_s);
+    }
+    uint8_t irq[3];
+    pmu_irq_status(irq);
+    int warn1 = 0, warn2 = 0;
+    pmu_low_batt_levels(&warn1, &warn2);
+    int ts_raw = pmu_ts_raw();
+    uint32_t card_mb = 0, card_free_mb = 0;
+    sdcard_space(&card_mb, &card_free_mb);
+    ESP_LOGI(TAG, "boot: clock from %s, RTC %s, drift %s s, NTP path %d ms; PMU irq %02x%02x%02x, TS raw %d, low-battery warnings at %d%% and %d%%; card %" PRIu32 " of %" PRIu32 " MB free",
+             ti.clock, ti.rtc_valid ? "valid" : "had STOPPED", drift, ti.ntp_ms, irq[0], irq[1], irq[2], ts_raw, warn1, warn2,
+             card_free_mb, card_mb);
+    char now[32], buf[960];
     snprintf(buf, sizeof(buf),
              "{\"t\":\"boot\",\"time\":\"%s\",\"up_s\":%lld,\"reset\":\"%s\",\"rtc_ram\":\"%s\",\"pmu_on\":\"%02x\","
              "\"pmu_on_src\":\"%s\",\"pmu_off\":\"%02x\",\"pmu_off_src\":\"%s\",\"crash_streak\":%" PRIu32 ","
              "\"chip_c\":%.1f,\"pmu_c\":%.1f,\"chg_ma\":%d,\"chg_mv\":%d,\"in_ma\":%d,\"treg_c\":%d,"
-             "\"trips\":%" PRIu32 ",\"last_trip\":%s}",
+             "\"trips\":%" PRIu32 ",\"last_trip\":%s,"
+             "\"rtc_valid\":%d,\"clock\":\"%s\",\"rtc_drift_s\":%s,\"ntp_ms\":%d,\"ts_raw\":%d,\"warn_pct\":[%d,%d],"
+             "\"pmu_irq\":\"%02x%02x%02x\",\"card_mb\":%" PRIu32 ",\"card_free_mb\":%" PRIu32 "}",
              timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000000), why, rtc, on, on_txt, off, off_txt,
              s_panic_streak, jnum(s_thermal.chip_c), jnum(s_thermal.pmu_c), pmu_charge_ma(), pmu_charge_target_mv(),
-             pmu_input_limit_ma(), pmu_thermal_reg_c(), trip.count, trip_txt);
+             pmu_input_limit_ma(), pmu_thermal_reg_c(), trip.count, trip_txt, ti.rtc_valid, ti.clock, drift, ti.ntp_ms, ts_raw,
+             warn1, warn2, irq[0], irq[1], irq[2], card_mb, card_free_mb);
     sdlog_aux_write(1, buf);
 }
 
@@ -803,12 +884,24 @@ void app_main(void)
     TickType_t last_beat = xTaskGetTickCount();
     TickType_t last_word_tick = 0;
     for (;;) {
+        if (s_loop_work_start) {
+            int64_t work = esp_timer_get_time() - s_loop_work_start; /* the previous turn, its wait excluded */
+            if (work > s_loop_max_us) {
+                s_loop_max_us = work;
+                s_loop_max_label = s_loop_label;
+            }
+        }
         word_event_t ev;
-        if (xQueueReceive(s_events, &ev, pdMS_TO_TICKS(250)) == pdTRUE) {
+        bool got_word = xQueueReceive(s_events, &ev, pdMS_TO_TICKS(250)) == pdTRUE;
+        s_loop_work_start = esp_timer_get_time();
+        s_loop_label = "idle";
+        s_loop_turns++;
+        if (got_word) {
             /* One utterance, one card: the engine can fire twice on a word's tail. */
             if (last_word_tick && xTaskGetTickCount() - last_word_tick < pdMS_TO_TICKS(DEDUPE_MS)) {
                 ESP_LOGI(TAG, "ignored '%s' %.0f%%: within %d ms of the last word", ev.text, ev.prob * 100, DEDUPE_MS);
             } else {
+                s_loop_label = "word"; /* card render, JPEG decode from the card, maybe a sound */
                 on_word(&ev);
                 last_word_tick = xTaskGetTickCount();
             }
@@ -818,6 +911,9 @@ void app_main(void)
         /* The card can come and go whether we are awake or asleep. */
         bool card_changed = sdcard_poll();
         char cmd = devcmd_take();
+        if (bev != BUTTON_NONE || cmd) {
+            s_loop_label = bev != BUTTON_NONE ? "button" : "command";
+        }
         thermal_step(); /* every turn, in every mode: the guard runs asleep and in maintenance too */
         /* What a press or command lands on, taken before it acts; the record names the outcome. */
         const char *screen_before = screen_name();
@@ -934,6 +1030,7 @@ void app_main(void)
             continue;
         }
         if (card_changed) {
+            s_loop_label = "card";
             if (sdcard_present()) {
                 card_arrived(false);
             } else {
@@ -957,16 +1054,20 @@ void app_main(void)
             normal_status();
         }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
+            s_loop_label = "tap";
             /* Tap: wake the screen if it has dimmed. Nothing else; taps make no sound. */
             const char *what = s_dimmed ? "brighten" : "keep_awake";
             tap_record(what);
             wake_screen();
         }
         if (xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_SLEEP_AFTER_S * 60 * 1000)) {
+            s_loop_label = "sleep";
             enter_sleep("quiet");
             continue;
         }
-        pmu_poll();
+        if (pmu_poll()) {
+            s_loop_label = "usb"; /* a plug or unplug: rails dumped and a record written */
+        }
         maybe_dim();
         if (xTaskGetTickCount() - last_beat >= pdMS_TO_TICKS(10000)) {
             last_beat = xTaskGetTickCount();

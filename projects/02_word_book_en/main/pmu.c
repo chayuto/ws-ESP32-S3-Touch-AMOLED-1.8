@@ -20,6 +20,9 @@ static const char *TAG = "pmu";
 #define REG_COMMON_CFG    0x10 /* bit0 soft power-off (RWAC), bit1 restart */
 #define REG_IIN_LIMIT     0x16 /* bits2:0: 100/500/900/1000/1500/2000 mA */
 #define REG_CHG_GAUGE_WDT 0x18 /* bit1 cell battery charge enable, bit3 gauge enable */
+#define REG_LOW_BATT_WARN 0x1A /* bits7:4 level2 = 5 + n %, bits3:0 level1 = n % */
+#define REG_ADC_TS        0x36 /* H6L8 */
+#define REG_IRQ_STATUS0   0x48 /* 48/49/4A, RW1C; we only read */
 #define REG_CHIP_ID       0x03 /* 0x4a */
 #define REG_PWRON_STATUS  0x20 /* why the PMU last powered on; holds until the next power-on */
 #define REG_PWROFF_STATUS 0x21 /* why it last powered off; holds until the PMU itself loses power */
@@ -352,4 +355,33 @@ esp_err_t pmu_power_off(void)
     vTaskDelay(pdMS_TO_TICKS(2000)); /* the rails should be gone before this returns */
     ESP_LOGE(TAG, "still running 2 s after the power-off write");
     return ESP_FAIL;
+}
+
+void pmu_irq_status(uint8_t out[3])
+{
+    out[0] = out[1] = out[2] = 0;
+    if (s_ready) {
+        rd(REG_IRQ_STATUS0, &out[0]);
+        rd(REG_IRQ_STATUS0 + 1, &out[1]);
+        rd(REG_IRQ_STATUS0 + 2, &out[2]);
+    }
+}
+
+int pmu_ts_raw(void)
+{
+    uint8_t h = 0, l = 0;
+    if (!s_ready || rd(REG_ADC_TS, &h) != ESP_OK || rd(REG_ADC_TS + 1, &l) != ESP_OK) {
+        return -1;
+    }
+    return ((h & 0x3F) << 8) | l;
+}
+
+void pmu_low_batt_levels(int *lvl1_pct, int *lvl2_pct)
+{
+    uint8_t v = 0;
+    if (s_ready) {
+        rd(REG_LOW_BATT_WARN, &v);
+    }
+    if (lvl1_pct) *lvl1_pct = v & 0x0F;
+    if (lvl2_pct) *lvl2_pct = 5 + (v >> 4);
 }

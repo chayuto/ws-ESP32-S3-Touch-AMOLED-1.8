@@ -12,6 +12,9 @@
  */
 esp_err_t pcf85063_init(void);
 
+/* True if the oscillator-stopped flag was set at init: the RTC had lost its time. */
+bool pcf85063_was_stopped(void);
+
 /* Read the clock. Fails if the oscillator-stopped flag is set (time is not trustworthy). */
 esp_err_t pcf85063_get(struct tm *out);
 

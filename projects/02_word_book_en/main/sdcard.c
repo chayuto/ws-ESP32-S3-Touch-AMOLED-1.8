@@ -1,8 +1,11 @@
 #include "sdcard.h"
 
+#include <inttypes.h>
+
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 
 static const char *TAG = "sdcard";
@@ -12,6 +15,8 @@ static const char *TAG = "sdcard";
 static bool s_present;
 static int64_t s_last_poll_us;
 static bool s_check_now;
+static uint32_t s_io_errors;
+static uint32_t s_total_mb, s_free_mb;
 
 /* Retrying every few seconds with no card would spam three lines each time. */
 static void quiet_mount_logs(bool quiet)
@@ -32,6 +37,17 @@ static bool try_mount(void)
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "mounted at %s in %lld ms: %s, %llu MB", BSP_SD_MOUNT_POINT, ms, bsp_sdcard->cid.name,
                  ((uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size) / (1024 * 1024));
+        /* Once per mount, never periodic: with a stale FSINFO this walks the whole FAT. */
+        uint64_t total = 0, free_b = 0;
+        int64_t t1 = esp_timer_get_time();
+        if (esp_vfs_fat_info(BSP_SD_MOUNT_POINT, &total, &free_b) == ESP_OK) {
+            s_total_mb = (uint32_t)(total >> 20);
+            s_free_mb = (uint32_t)(free_b >> 20);
+            ESP_LOGI(TAG, "%" PRIu32 " of %" PRIu32 " MB free (%lld ms to find out)", s_free_mb, s_total_mb,
+                     (esp_timer_get_time() - t1) / 1000);
+        } else {
+            s_total_mb = s_free_mb = 0;
+        }
         return true;
     }
     ESP_LOGD(TAG, "no card (%s, %lld ms)", esp_err_to_name(err), ms);
@@ -70,6 +86,7 @@ bool sdcard_poll(void)
             ESP_LOGW(TAG, "card gone");
             bsp_sdcard_unmount(); /* best effort; frees the host so a remount can work */
             s_present = false;
+            s_total_mb = s_free_mb = 0;
         }
     } else {
         s_present = try_mount();
@@ -84,5 +101,17 @@ bool sdcard_present(void)
 
 void sdcard_report_io_error(void)
 {
+    s_io_errors++;
     s_check_now = true;
+}
+
+uint32_t sdcard_io_errors(void)
+{
+    return s_io_errors;
+}
+
+void sdcard_space(uint32_t *total_mb, uint32_t *free_mb)
+{
+    if (total_mb) *total_mb = s_present ? s_total_mb : 0;
+    if (free_mb) *free_mb = s_present ? s_free_mb : 0;
 }

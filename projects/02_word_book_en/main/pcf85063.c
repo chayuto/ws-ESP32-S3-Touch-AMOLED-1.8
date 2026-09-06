@@ -7,6 +7,8 @@
 #include "esp_check.h"
 #include "esp_log.h"
 
+static bool s_was_stopped, s_probed;
+
 static const char *TAG = "rtc";
 
 #define PCF85063_ADDR   0x51
@@ -55,6 +57,8 @@ esp_err_t pcf85063_init(void)
     }
     uint8_t sec = 0;
     ESP_RETURN_ON_ERROR(rd(REG_SECONDS, &sec, 1), TAG, "read seconds");
+    s_was_stopped = sec & OS_FLAG;
+    s_probed = true;
     ESP_LOGI(TAG, "PCF85063 ready, oscillator %s", (sec & OS_FLAG) ? "STOPPED since last set - time not valid" : "running");
     return ESP_OK;
 }
@@ -89,4 +93,9 @@ esp_err_t pcf85063_set(const struct tm *t)
         bin2bcd((uint8_t)(t->tm_year - 100)),
     };
     return wr(REG_SECONDS, r, sizeof(r));
+}
+
+bool pcf85063_was_stopped(void)
+{
+    return !s_probed || s_was_stopped; /* not answering counts as not trustworthy */
 }
