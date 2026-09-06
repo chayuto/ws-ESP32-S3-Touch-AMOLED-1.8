@@ -329,15 +329,27 @@ jq -c 'select(.t=="input") | [.time, .src, .kind, .screen, .action]' 02_word_boo
 
 ### Buttons
 
-BOOT wakes, and only wakes. A short press on a dark screen wakes it, on a dimmed screen
-brightens it, and on a lit screen shows "awake - hold BOOT for setup" on the status line
-for two seconds, so no press ever looks ignored. Sleep is the quiet timer's job
-(`CONFIG_WORDBOOK_SLEEP_AFTER_S`, 10 min) or the serial `s`. A hold of
-`CONFIG_WORDBOOK_LONG_PRESS_MS` (1000) is maintenance mode. The button is sampled every
-10 ms from a timer and each press is latched for the main loop, so a quick tap registers
-(the loop turns every 250 ms and could miss a press shorter than that). PWR belongs to
-the PMU: a short press does nothing, a hold of 6 s or more powers the board off, a press
-powers it on. The idle card is a plain blue with the words on it so a dimmed (50 %) board
+One BOOT press wakes, and only wakes: on a dark screen it wakes, on a dimmed screen it
+brightens, and on a lit screen it shows an ack on the status line for two seconds, so no
+press ever looks ignored. Nothing you do with BOOT turns the screen off. A hold of
+`CONFIG_WORDBOOK_LONG_PRESS_MS` (1000) is maintenance mode. The serial `s` toggles sleep,
+and the thermal guard sleeps a hot board.
+
+**The board no longer darkens itself.** `CONFIG_WORDBOOK_DIM_AFTER_S` and
+`CONFIG_WORDBOOK_SLEEP_AFTER_S` both default to 0, which means never. Set one only after
+the panel has been shown to survive sleep/wake unattended — see *A dark screen* below.
+
+A two-press "screen off" gesture existed for a few hours on 2026-09-06 and was removed the
+same day. It is worth knowing why, because it looks like a good idea: a second press is
+exactly what a person does when the screen appears dead, so making that mean *turn the
+screen off* took the one recovery action a user reaches for and turned it into the fault.
+The card records caught the board and the user fighting each other — `double -> sleep`,
+`short -> wake`, `double -> sleep`, seconds apart.
+
+The button is sampled every 10 ms from a timer and each press is latched for the main
+loop, so a quick tap registers (the loop turns every 250 ms and could miss a press shorter
+than that). PWR belongs to the PMU: a short press does nothing, a hold of 6 s or more
+powers the board off, a press powers it on. The idle card is a plain blue with the words on it so a dimmed (50 %) board
 still looks on. Serial: `p` rails and power, `b` full brightness, `x` panel re-init.
 Every press, tap and command is recorded with what it landed on and what it did (input
 records, above).

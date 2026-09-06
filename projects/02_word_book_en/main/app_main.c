@@ -154,21 +154,24 @@ static void wake_screen(void)
     s_woke_at = s_last_activity;
     if (s_dimmed) {
         if (s_thermal.level >= THERMAL_WARM) {
-            bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS); /* warm: dim is the ceiling, however often it is touched */
+            cards_set_brightness(CONFIG_WORDBOOK_DIM_BRIGHTNESS); /* warm: dim is the ceiling, however often it is touched */
             return;
         }
         s_dimmed = false;
-        esp_err_t err = bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
+        esp_err_t err = cards_set_brightness(CONFIG_WORDBOOK_BRIGHTNESS);
         ESP_LOGI(TAG, "screen: bright (%d%%, write %s)", CONFIG_WORDBOOK_BRIGHTNESS, esp_err_to_name(err));
     }
 }
 
 static void maybe_dim(void)
 {
+    if (CONFIG_WORDBOOK_DIM_AFTER_S == 0) {
+        return; /* the board does not dim itself; only the thermal guard does */
+    }
     if (!s_dimmed && xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_DIM_AFTER_S * 1000)) {
         s_loop_label = "dim";
         s_dimmed = true;
-        esp_err_t err = bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
+        esp_err_t err = cards_set_brightness(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
         ESP_LOGI(TAG, "screen: dim %d%% after %d s quiet (write %s)", CONFIG_WORDBOOK_DIM_BRIGHTNESS, CONFIG_WORDBOOK_DIM_AFTER_S,
                  esp_err_to_name(err));
     }
@@ -367,7 +370,7 @@ static void enter_sleep(const char *why)
      * 2026-09-06, 72 minutes "asleep" on battery took the gauge from 95 % to 46 %, the
      * same drain as in use. Stopping frees the AFE as well; waking rebuilds it. */
     recognizer_stop();
-    bsp_display_brightness_set(0);
+    cards_display_off(); /* a real disp_off, not brightness 0 - see cards.c */
     pmu_set_record_period_s(CONFIG_WORDBOOK_SLEEP_POWER_LOG_S);
     ESP_LOGI(TAG, "sleep (%s): screen off, recogniser stopped; press BOOT to wake", why);
     state_record("sleep");
@@ -380,7 +383,11 @@ static void leave_sleep(bool listen)
         return;
     }
     s_asleep = false;
-    s_dimmed = true; /* so wake_screen() restores full brightness */
+    /* Full re-init, not a brightness write. Waking from a display-off with a bare 0x51
+     * left the CO5300 dark while every log line claimed the screen was on; the panel
+     * re-init sequence is the only thing that reliably brings it back. */
+    cards_panel_reinit();
+    s_dimmed = true; /* so wake_screen() restores the configured brightness */
     wake_screen();
     pmu_set_record_period_s(CONFIG_WORDBOOK_POWER_LOG_S);
     if (listen) {
@@ -427,7 +434,10 @@ static int64_t s_trip_failed_us;
 static void hot_ack(void)
 {
     cards_status("too warm - cooling down, wait");
-    bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
+    if (s_asleep) {
+        cards_panel_reinit(); /* asleep means disp_off; a brightness write alone shows nothing */
+    }
+    cards_set_brightness(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
     s_hot_ack_until = xTaskGetTickCount() + pdMS_TO_TICKS(3000);
     if (s_hot_ack_until == 0) {
         s_hot_ack_until = 1;
@@ -483,7 +493,7 @@ static void thermal_step(void)
     } else if (st.level == THERMAL_WARM && was == THERMAL_OK && !s_asleep && !s_maint) {
         if (!s_dimmed) {
             s_dimmed = true;
-            bsp_display_brightness_set(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
+            cards_set_brightness(CONFIG_WORDBOOK_DIM_BRIGHTNESS);
         }
         cards_status("warm - screen dimmed to cool");
     } else if (st.level == THERMAL_OK && was == THERMAL_WARM && !s_asleep && !s_maint) {
@@ -818,7 +828,7 @@ void app_main(void)
     if (disp == NULL) {
         ESP_LOGE(TAG, "DISPLAY INIT FAILED - running blind; audio and recogniser continue");
     }
-    bsp_display_brightness_set(CONFIG_WORDBOOK_BRIGHTNESS);
+    cards_set_brightness(CONFIG_WORDBOOK_BRIGHTNESS);
     s_last_activity = xTaskGetTickCount();
     ESP_LOGI(TAG, "display up: %" PRId32 "x%" PRId32, lv_display_get_horizontal_resolution(disp),
              lv_display_get_vertical_resolution(disp));
@@ -932,11 +942,10 @@ void app_main(void)
                 action = s_maint ? "maint_in" : "maint_failed";
             }
         } else if (bev == BUTTON_SHORT && !s_maint) {
-            /* BOOT wakes, and only wakes. It used to sleep a lit screen as well, and on
-             * 2026-09-06 the user's own presses put the board to sleep twice in twelve
-             * seconds; with "brighten" invisible on a bright screen that read as "black
-             * screen, no response to any button". Sleep is the quiet timer's or the
-             * serial `s`'s job, and every press now says something on the status line. */
+            /* One press wakes and brightens. It never sleeps, and there is no second-press
+             * gesture: a double press briefly meant "screen off" on 2026-09-06 and was
+             * removed hours later. Pressing again is what a person does when the screen
+             * looks dead, so that is the last thing that should darken it. */
             if (s_thermal.level >= THERMAL_HOT) {
                 hot_ack(); /* a board that is cooling stays asleep, and says so for three seconds */
                 action = "ignored_hot";
@@ -1007,7 +1016,8 @@ void app_main(void)
                      s_thermal.pmu_c, thermal_level_name(s_thermal.level));
         }
         if (bev != BUTTON_NONE) {
-            input_record("boot", bev == BUTTON_LONG ? "long" : "short", button_last_held_ms(), -1, -1, screen_before,
+            const char *kind = bev == BUTTON_LONG ? "long" : "short";
+            input_record("boot", kind, button_last_held_ms(), -1, -1, screen_before,
                          asleep_before, maint_before, wake_s, action ? action : "ignored");
         } else if (cmd) {
             char kind[2] = {cmd, '\0'};
@@ -1045,7 +1055,7 @@ void app_main(void)
             pmu_poll(); /* USB in/out and the battery curve are recorded through a sleep as well */
             if (s_hot_ack_until && (int32_t)(xTaskGetTickCount() - s_hot_ack_until) >= 0) {
                 s_hot_ack_until = 0;
-                bsp_display_brightness_set(0); /* the "cooling down" note has been up long enough */
+                cards_display_off(); /* the "cooling down" note has been up long enough */
             }
             continue; /* nothing else runs while asleep; the loop still turns for the button and card */
         }
@@ -1060,7 +1070,8 @@ void app_main(void)
             tap_record(what);
             wake_screen();
         }
-        if (xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_SLEEP_AFTER_S * 60 * 1000)) {
+        if (CONFIG_WORDBOOK_SLEEP_AFTER_S > 0 &&
+            xTaskGetTickCount() - s_last_activity >= pdMS_TO_TICKS(CONFIG_WORDBOOK_SLEEP_AFTER_S * 60 * 1000)) {
             s_loop_label = "sleep";
             enter_sleep("quiet");
             continue;

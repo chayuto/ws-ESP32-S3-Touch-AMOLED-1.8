@@ -316,8 +316,20 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
   46 %, the same drain as in use. `02_word_book_en` now stops the tasks and frees the AFE
   on sleep and rebuilds it on wake. Same day: BOOT on a lit screen used to sleep the
   board, and a "black screen, no response to any button" report was the user's own
-  presses; the card records showed it, the board had never reset. BOOT now only wakes,
-  and every press is acknowledged on the status line.
+  presses; the card records showed it, the board had never reset. One BOOT press now only
+  wakes, and every press is acknowledged on the status line. A two-press "screen off"
+  gesture was added and removed the same day (2026-09-06): a second press is what someone
+  does when the screen looks dead, so that gesture turns the user's own recovery action
+  into the fault. **Do not add a multi-press gesture to this board.**
+- **`bsp_display_brightness_set()` lies.** It sends MIPI 0x51 over QSPI and then
+  `return ESP_OK;` unconditionally, discarding the transmit result, so a failed write
+  reports success and the logs claim the screen is on at a black panel. Use
+  `cards_set_brightness()`, which checks `esp_lcd_panel_io_tx_param()`. And sleep with
+  `cards_display_off()` (a real `disp_on_off(false)`), never brightness 0: the CO5300 does
+  not reliably come back from that with another 0x51, and there is no panel reset line on
+  this board (`LCD RST` is `GPIO_NUM_NC`), so waking does a full `cards_panel_reinit()`.
+  Default `WORDBOOK_DIM_AFTER_S` and `WORDBOOK_SLEEP_AFTER_S` to 0: a board that darkens
+  itself is indistinguishable from a broken one.
 - **The board watches its own temperature.** Both dies (ESP32-S3 sensor, AXP2101 REG 3C)
   are read once a second by `02_word_book_en`'s `thermal.c`; the hotter one drives a
   three-step guard (dim at 60 °C, sleep + charger off at 70, PMU soft power-off at 80,

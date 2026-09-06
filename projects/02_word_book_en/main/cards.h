@@ -39,5 +39,12 @@ void cards_show_buffer(const uint8_t *rgb565, const char *caption);
 void cards_force_bright(void);
 void cards_panel_reinit(void);
 
+/*
+ * Brightness 0-100, and a real display off. Use these, not bsp_display_brightness_set():
+ * the BSP discards the QSPI transmit result and always reports ESP_OK.
+ */
+esp_err_t cards_set_brightness(int pct);
+esp_err_t cards_display_off(void);
+
 /* One-line status at the bottom (self-test progress, card state). */
 void cards_status(const char *text);

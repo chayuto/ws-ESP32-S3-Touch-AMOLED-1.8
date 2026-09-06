@@ -13,6 +13,7 @@
 #include "bsp/display.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/touch.h"
+#include "esp_lcd_panel_io.h"
 #include "esp_lvgl_port.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -40,10 +41,54 @@ static int s_next;
 
 static cards_tap_cb_t s_on_tap;
 static esp_lcd_panel_handle_t s_panel;
+static esp_lcd_panel_io_handle_t s_io;
+
+/*
+ * Brightness, checked. bsp_display_brightness_set() sends MIPI 0x51 over the QSPI bus
+ * and then `return ESP_OK;` unconditionally - it discards the transmit result. On
+ * 2026-09-06 that cost us an afternoon: the panel sat black while every log line said
+ * the screen was on, because a failed write reported success. Same command, same
+ * 0x02<<24 QSPI command-mode flag, but we look at what the bus says.
+ */
+esp_err_t cards_set_brightness(int pct)
+{
+    if (s_io == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (pct < 0) { pct = 0; }
+    if (pct > 100) { pct = 100; }
+    uint8_t param = (uint8_t)(pct * 255 / 100);
+    uint32_t lcd_cmd = 0x51;
+    lcd_cmd &= 0xff;
+    lcd_cmd <<= 8;
+    lcd_cmd |= 0x02 << 24;
+    esp_err_t err = esp_lcd_panel_io_tx_param(s_io, lcd_cmd, &param, 1);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "brightness %d%% NOT written: %s", pct, esp_err_to_name(err));
+    }
+    return err;
+}
+
+/*
+ * Sleep turns the panel off properly. It used to write brightness 0, which leaves the
+ * CO5300 powered and displaying black; a later 0x51 did not reliably bring it back, and
+ * the only recovery was the full re-init below. Pair this with cards_panel_reinit() on
+ * wake, never with a bare brightness write.
+ */
+esp_err_t cards_display_off(void)
+{
+    if (s_panel == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t a = cards_set_brightness(0);
+    esp_err_t b = esp_lcd_panel_disp_on_off(s_panel, false);
+    ESP_LOGI(TAG, "display off: brightness %s, disp_off %s", esp_err_to_name(a), esp_err_to_name(b));
+    return b != ESP_OK ? b : a;
+}
 
 void cards_force_bright(void)
 {
-    esp_err_t err = bsp_display_brightness_set(100);
+    esp_err_t err = cards_set_brightness(100);
     ESP_LOGI(TAG, "brightness 100: %s", esp_err_to_name(err));
     if (bsp_display_lock(300)) {
         lv_obj_invalidate(lv_screen_active());
@@ -59,7 +104,7 @@ void cards_panel_reinit(void)
     }
     esp_err_t a = esp_lcd_panel_init(s_panel);
     esp_err_t b = esp_lcd_panel_disp_on_off(s_panel, true);
-    esp_err_t c = bsp_display_brightness_set(100);
+    esp_err_t c = cards_set_brightness(100);
     ESP_LOGI(TAG, "panel re-init: init %s, disp_on %s, brightness %s", esp_err_to_name(a), esp_err_to_name(b), esp_err_to_name(c));
     if (bsp_display_lock(300)) {
         lv_obj_invalidate(lv_screen_active());
@@ -82,6 +127,7 @@ lv_display_t *cards_display_start(void)
         return NULL;
     }
     s_panel = panel;
+    s_io = io;
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io,
         .panel_handle = panel,

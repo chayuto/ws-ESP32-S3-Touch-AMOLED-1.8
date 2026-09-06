@@ -76,13 +76,19 @@ menu "Word book"
             12 and 35 both read as "screen off" on this AMOLED with a dark card.
 
     config WORDBOOK_SLEEP_AFTER_S
-        int "Minutes of quiet before the screen turns off and listening stops"
-        range 1 1440
-        default 10
+        int "Minutes of quiet before the screen turns off and listening stops, 0 to never"
+        range 0 1440
+        default 0
         help
             After this long with no word, the display goes fully off and the
             recogniser is stopped. Press BOOT to wake. BOOT never sleeps it;
-            the serial `s` command does.
+            the serial `s` command and a thermal trip do.
+
+            Default 0: the board never turns its own screen off. Every "black
+            screen" report on this project so far has been the board darkening
+            itself while someone was looking at it, and a dark screen is
+            indistinguishable from a dead one. Set a timeout only once the
+            panel has been proven to survive a sleep/wake cycle unattended.
 
     config WORDBOOK_LONG_PRESS_MS
         int "BOOT hold time for maintenance mode (ms)"
@@ -159,9 +165,12 @@ menu "Word book"
         default 10
 
     config WORDBOOK_DIM_AFTER_S
-        int "Seconds of quiet before dimming"
-        range 5 3600
-        default 60
+        int "Seconds of quiet before dimming, 0 to never"
+        range 0 3600
+        default 0
+        help
+            Default 0: no idle dimming. The thermal guard still dims a warm
+            board - that one has a reason the user can be told about.
 
     config WORDBOOK_THERMAL_WARM_C
         int "Thermal guard: warm, die C (screen dims)"

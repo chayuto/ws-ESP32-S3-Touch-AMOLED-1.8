@@ -11,6 +11,11 @@ typedef enum { BUTTON_NONE = 0, BUTTON_SHORT, BUTTON_LONG } button_event_t;
 /*
  * Poll from the main loop. SHORT is reported on release of a press under the
  * long threshold; LONG fires once while still held, at the threshold.
+ *
+ * There is deliberately no multi-press gesture. One was added on 2026-09-06 and
+ * removed the same day: the latch below holds a single event, and more to the
+ * point, a second press is what a person does when the screen looks dead. Making
+ * that mean "turn the screen off" made a dark screen worse, not better.
  */
 button_event_t button_poll(void);
 
