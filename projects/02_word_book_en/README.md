@@ -227,7 +227,8 @@ jq -c 'select(.t=="det") | [.time, .verdict, .cands[0].w, .cands[0].p]' 02_word_
 ### State records
 
 `/sdcard/02_word_book_en.state.jsonl` — one record every `CONFIG_WORDBOOK_POWER_LOG_S`
-(30) seconds and one on every plug, unplug, sleep, wake and maintenance in/out:
+(30) seconds awake, every `CONFIG_WORDBOOK_SLEEP_POWER_LOG_S` (300) asleep, and one on
+every plug, unplug, sleep, wake and maintenance in/out:
 everything the board knows about itself on one line — USB and its voltage, battery
 present / mV / % / charge phase, system voltage, rail-enable registers, screen state and
 brightness, sleep and maintenance flags, heap current and minimum, PSRAM, card / files /
@@ -239,9 +240,23 @@ percentage, uptime and real time. From the page: last 100, download, clear; API
 {"t":"state","time":"2026-09-06 09:40:06","up_s":6,"event":"boot","usb":1,"vbus_mv":5222,"battery":1,"vbat_mv":4114,"pct":100,"vsys_mv":4361,"charging":0,"chg":"done","dcdc_en":"0f","ldo_en":"ff01","screen":"on","brightness":85,"asleep":0,"maint":0,"internal":56603,"internal_min":19075,"psram":4137488,"card":1,"files":1,"log":1,"log_bytes":348323,"words":19,"heard":0,"last":"","last_p":0.00,"mic_avg":-63.6,"mic_peak":-52.0,"speech_pct":0}
 ```
 
+A `boot` record follows the first state record of each run: the chip's reset reason,
+whether RTC RAM survived (`rtc_ram` `kept` = a warm reset with the PMU on throughout;
+`lost` = the board had no power, or a full chip reset such as esptool's after a flash,
+which also reads `poweron`), and from the PMU why it last powered on and off
+(`pmu_on_src`: `pwr_key`, `vbus_insert`, `battery_insert`, ...; `pmu_off_src`:
+`pwr_key_held`, `vsys_undervoltage`, `software`, ..., or `none`; both hold their last
+cause across resets), plus the crash streak. "Did it lose power?" is then one line.
+
+```
+{"t":"boot","time":"2026-09-06 13:40:34","up_s":5,"reset":"poweron","rtc_ram":"lost","pmu_on":"04","pmu_on_src":"vbus_insert","pmu_off":"01","pmu_off_src":"pwr_key_held","crash_streak":0}
+```
+
 Background: the screen was reported dark several times. Every case in the card log was
 a sleep (BOOT on a lit screen), a dim (12 % / 35 % on a near-black card) or a second press
 right after waking — never a rail. The record makes that readable in one line per event.
+2026-09-06 again, after an unplug: two sleeps by BOOT, invisible brightens, no reset
+(Buttons, below).
 
 ### Input records
 
@@ -249,9 +264,9 @@ Every BOOT press, tap on the glass and serial command writes an `input` record t
 same state file, and one line to the log — taken *before* the action, so it says what the
 press landed on and what it did: source (`boot`, `touch`, `serial`), kind (`short`,
 `long`, `tap`, or the command letter), hold time in ms for the button (a long press
-reports the 1500 ms threshold, since it fires while still held), touch point in panel
+reports the `CONFIG_WORDBOOK_LONG_PRESS_MS` threshold, since it fires while still held), touch point in panel
 pixels, screen state (`on`, `dim`, `off`), asleep and maintenance flags, seconds since the
-last wake, and the outcome: `wake`, `brighten`, `sleep`, `keep_awake`, `maint_in`,
+last wake, and the outcome: `wake`, `brighten`, `awake`, `sleep`, `keep_awake`, `maint_in`,
 `maint_out`, `maint_failed`, `reload`, `power`, `bright`, `panel_reinit`, `info`,
 `debug_all`, `debug_own`, `ignored`, `ignored_asleep`, `ignored_maint`.
 
@@ -266,13 +281,34 @@ jq -c 'select(.t=="input") | [.time, .src, .kind, .screen, .action]' 02_word_boo
 
 ### Buttons
 
-A short BOOT press on a **dark or dimmed** screen wakes it — never sleeps it — and a press
-within three seconds of waking only brightens. Sleep is a short press on a fully lit
-screen that has been lit for a while, or the quiet timer. A long press is maintenance
-mode. The idle card is a plain blue with the words on it so a dimmed (50 %) board still
-looks on. Serial: `p` rails and power, `b` full brightness, `x` panel re-init. Every
-press, tap and command is recorded with what it landed on and what it did (input records,
-above).
+BOOT wakes, and only wakes. A short press on a dark screen wakes it, on a dimmed screen
+brightens it, and on a lit screen shows "awake - hold BOOT for setup" on the status line
+for two seconds, so no press ever looks ignored. Sleep is the quiet timer's job
+(`CONFIG_WORDBOOK_SLEEP_AFTER_S`, 10 min) or the serial `s`. A hold of
+`CONFIG_WORDBOOK_LONG_PRESS_MS` (1000) is maintenance mode. The button is sampled every
+10 ms from a timer and each press is latched for the main loop, so a quick tap registers
+(the loop turns every 250 ms and could miss a press shorter than that). PWR belongs to
+the PMU: a short press does nothing, a hold of 6 s or more powers the board off, a press
+powers it on. The idle card is a plain blue with the words on it so a dimmed (50 %) board
+still looks on. Serial: `p` rails and power, `b` full brightness, `x` panel re-init.
+Every press, tap and command is recorded with what it landed on and what it did (input
+records, above).
+
+Until 2026-09-06 BOOT on a lit screen slept it, and holds under 1.5 s counted as short.
+The records behind that day's "black screen, no response to any button": the user's own
+presses slept it twice in twelve seconds, two 1.25 s holds meant as long fell under the
+threshold, and eight "brighten" presses on a bright screen changed nothing visible. The
+board never reset. Hence this design.
+
+### Sleep and the battery
+
+Asleep, the screen is off and the recogniser is **stopped**: front-end tasks ended, AFE
+freed, MultiNet kept. Waking rebuilds the front end (180 ms, measured 2026-09-06).
+Until 2026-09-06 sleep only paused detection and the front end kept running the VAD on
+silence at full clock: 72 minutes asleep on battery took the gauge from 95 % to 46 %, the
+same drain as in use. Asleep, a state record is written every
+`CONFIG_WORDBOOK_SLEEP_POWER_LOG_S` (300) seconds instead of every 30, and USB in/out is
+still recorded.
 
 ### Numbers
 
@@ -453,6 +489,8 @@ Tap the screen with someone talking, and both are answered in six seconds.
 |---|---|---|
 | `SPEAKER_VOLUME` | 90 | The vendor example uses 90 on V2 hardware, 70 on V1 |
 | `CONFIG_WORDBOOK_MIC_GAIN_DB` | 30 | Adult peaks at -12 dBFS, room at -52 (2026-09-06); a soft child may need 33-36 |
+| `CONFIG_WORDBOOK_LONG_PRESS_MS` | 1000 | 1.25 s holds meant as "long" fell under the old 1.5 s (2026-09-06) |
+| `CONFIG_WORDBOOK_SLEEP_POWER_LOG_S` | 300 | State record cadence asleep; 30 s awake |
 | Audio task | core 1, priority 5 | Away from LVGL on core 0; the recogniser will share this task |
 
 ## Layout
@@ -472,7 +510,7 @@ main/maint.[ch]+.html  maintenance mode: HTTP API + page
 main/devcmd.[ch]       single-letter serial commands
 main/clog.[ch]         classifier + environment records (JSON Lines) → sdlog aux channel 0
 main/pmu.[ch]          AXP2101: rails, battery, USB; triggers the state record (sdlog aux channel 1)
-main/button.[ch]       BOOT button (GPIO 0), polled: short / long, hold time
+main/button.[ch]       BOOT button (GPIO 0), sampled every 10 ms, latched: short / long, hold time
 assets/photos/         starter photo set + CREDITS.md
 assets/book/           generated drop-in folder for the card (gitignored)
 main/fonts/            lv_font_montserrat_72, generated with lv_font_conv

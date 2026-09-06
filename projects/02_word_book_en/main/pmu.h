@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -45,3 +46,12 @@ void pmu_set_record_cb(pmu_record_cb_t cb);
 
 /* Rail enable registers, for the record. */
 void pmu_rail_bits(uint8_t *dcdc_en, uint8_t *ldo_en0, uint8_t *ldo_en1);
+
+/* Seconds between periodic records; the app slows it while asleep. */
+void pmu_set_record_period_s(int seconds);
+
+/*
+ * Why the PMU last powered on (REG 20) and off (REG 21): raw bits and readable names
+ * ("vbus_insert", "pwr_key_held", ... or "none"). Answers "did it lose power?" at boot.
+ */
+void pmu_power_sources(uint8_t *on_bits, uint8_t *off_bits, char *on_txt, size_t on_n, char *off_txt, size_t off_n);

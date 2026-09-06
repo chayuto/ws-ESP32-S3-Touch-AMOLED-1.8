@@ -311,6 +311,13 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
   PWR, keep BOOT ~2 s — so nothing runs and esptool can connect. Every such recovery is
   a manual step for the person at the desk, which is why the rule above exists, and why
   `02_word_book_en` drops into a safe mode after three consecutive crashes.
+- **Sleep must stop the recogniser, not pause it.** Measured 2026-09-06: with the front
+  end paused but still running, 72 minutes asleep on battery took the gauge from 95 % to
+  46 %, the same drain as in use. `02_word_book_en` now stops the tasks and frees the AFE
+  on sleep and rebuilds it on wake. Same day: BOOT on a lit screen used to sleep the
+  board, and a "black screen, no response to any button" report was the user's own
+  presses; the card records showed it, the board had never reset. BOOT now only wakes,
+  and every press is acknowledged on the status line.
 - **Restoring the shipped firmware is possible** — see `/restore-factory`. Take a fresh
   backup before any flash that you cannot otherwise undo.
 

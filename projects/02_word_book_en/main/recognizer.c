@@ -459,6 +459,8 @@ void recognizer_stop(void)
         s_feed_task = s_detect_task = NULL;
     }
     s_inject_samples = NULL;
+    s_mic_avg = s_mic_peak = -120; /* no stale level in the state records while stopped */
+    s_mic_speech = 0;
     /* MultiNet stays allocated: its destroy() double-frees (assert in tlsf from
      * multinet7_quantized.c:346 with the heap verified clean before the call). The AFE
      * - which holds the VAD model's internal RAM - is destroyed and rebuilt from the

@@ -223,8 +223,10 @@ static void tap_record(const char *action)
 
 /* --- Maintenance: Wi-Fi + HTTP API, recogniser stopped. Long press or 'm' toggles. --- */
 
-static void leave_sleep(void);
+static void leave_sleep(bool listen);
 static void restart_recognizer(void);
+static void normal_status(void);
+static void boot_record(void);
 
 static void maint_state(maint_app_state_t *out)
 {
@@ -240,7 +242,7 @@ static void enter_maint(void)
     if (s_maint) {
         return;
     }
-    leave_sleep();
+    leave_sleep(false); /* screen on; the recogniser stays stopped, Wi-Fi needs the room */
     cards_show_info("setup", "joining Wi-Fi...");
     cards_status("");
     recognizer_stop();
@@ -272,11 +274,11 @@ static void leave_maint(void)
     restart_recognizer();
     wake_screen();
     cards_show_idle();
-    cards_status("listening");
+    normal_status();
     state_record("maint_out");
 }
 
-/* --- Sleep: screen off, ears off. BOOT toggles it; quiet for long enough enters it. --- */
+/* --- Sleep: screen off, ears off. The quiet timer or the serial `s` enters it; BOOT leaves it. --- */
 
 static void enter_sleep(const char *why)
 {
@@ -284,13 +286,18 @@ static void enter_sleep(const char *why)
         return;
     }
     s_asleep = true;
-    recognizer_pause();
+    /* Stop, not pause. A paused front end still ran the VAD on silence at full clock:
+     * 2026-09-06, 72 minutes "asleep" on battery took the gauge from 95 % to 46 %, the
+     * same drain as in use. Stopping frees the AFE as well; waking rebuilds it. */
+    recognizer_stop();
     bsp_display_brightness_set(0);
-    ESP_LOGI(TAG, "sleep (%s): screen off, not listening; press BOOT to wake", why);
+    pmu_set_record_period_s(CONFIG_WORDBOOK_SLEEP_POWER_LOG_S);
+    ESP_LOGI(TAG, "sleep (%s): screen off, recogniser stopped; press BOOT to wake", why);
     state_record("sleep");
 }
 
-static void leave_sleep(void)
+/* `listen` false: the screen comes on but the recogniser stays stopped (maintenance). */
+static void leave_sleep(bool listen)
 {
     if (!s_asleep) {
         return;
@@ -298,9 +305,34 @@ static void leave_sleep(void)
     s_asleep = false;
     s_dimmed = true; /* so wake_screen() restores full brightness */
     wake_screen();
-    recognizer_resume();
-    ESP_LOGI(TAG, "awake: listening");
+    pmu_set_record_period_s(CONFIG_WORDBOOK_POWER_LOG_S);
+    if (listen) {
+        int64_t t0 = esp_timer_get_time();
+        restart_recognizer();
+        ESP_LOGI(TAG, "awake: listening again, front end rebuilt in %lld ms", (long long)((esp_timer_get_time() - t0) / 1000));
+    }
     state_record("wake");
+}
+
+/* --- Every press says something on the status line for ACK_MS; then the usual line returns. --- */
+
+#define ACK_MS 2000
+static TickType_t s_ack_until;
+
+static void show_ack(const char *text)
+{
+    cards_status(text);
+    s_ack_until = xTaskGetTickCount() + pdMS_TO_TICKS(ACK_MS);
+    if (s_ack_until == 0) {
+        s_ack_until = 1;
+    }
+}
+
+static void normal_status(void)
+{
+    char status[48];
+    snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_files_ok ? " from SD" : ", built-in");
+    cards_status(status);
 }
 
 
@@ -360,6 +392,9 @@ static void card_arrived(bool at_boot)
     sdlog_aux_open(0, CLOG_PATH);
     sdlog_aux_open(1, SLOG_PATH);
     state_record(at_boot ? "boot" : "card_in");
+    if (at_boot) {
+        boot_record();
+    }
     int slot = at_boot ? s_active : s_active ^ 1;
     book_t *nb = &s_books[slot];
     book_load(nb, BOOK_DIR);
@@ -485,11 +520,13 @@ static RTC_NOINIT_ATTR uint32_t s_panic_streak;
 static RTC_NOINIT_ATTR uint32_t s_panic_magic;
 #define PANIC_MAGIC 0x50414e43u /* "PANC" */
 #define PANIC_LIMIT 3
+static bool s_cold_boot; /* RTC RAM had no magic: the chip had no power at all, not merely a reset */
 
 static bool crash_loop_guard(void)
 {
     esp_reset_reason_t why = esp_reset_reason();
     if (s_panic_magic != PANIC_MAGIC) {
+        s_cold_boot = true;
         s_panic_magic = PANIC_MAGIC;
         s_panic_streak = 0;
     }
@@ -500,6 +537,56 @@ static bool crash_loop_guard(void)
         s_panic_streak = 0;
     }
     return s_panic_streak >= PANIC_LIMIT;
+}
+
+static const char *reset_name(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_EXT: return "ext";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    case ESP_RST_EFUSE: return "efuse";
+    case ESP_RST_PWR_GLITCH: return "pwr_glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu_lockup";
+    default: return "unknown";
+    }
+}
+
+/*
+ * One `boot` record per run, after the first state record: why the chip reset and, from
+ * the PMU, why it last powered on and off. 2026-09-06: "did it lose power?" had no answer
+ * on the card. Now it is one line.
+ */
+static void boot_record(void)
+{
+    uint8_t on = 0, off = 0;
+    char on_txt[80], off_txt[80];
+    pmu_power_sources(&on, &off, on_txt, sizeof(on_txt), off_txt, sizeof(off_txt));
+    const char *why = reset_name(esp_reset_reason());
+    /* The PMU's two registers hold their last cause across chip resets. RTC RAM says
+     * whether this reset went through the RTC domain: "kept" means a warm reset with the
+     * PMU on throughout; "lost" means the board had no power, or a full chip reset such
+     * as the one esptool issues after a flash (which also reports "poweron"). */
+    const char *rtc = s_cold_boot ? "lost" : "kept";
+    ESP_LOGI(TAG, "boot: chip reset %s, RTC RAM %s%s; PMU last powered on by %s, last powered off by %s; crash streak %" PRIu32,
+             why, rtc, s_cold_boot ? " (no power, or a full reset like esptool's)" : " (warm reset, PMU stayed on)", on_txt,
+             off_txt, s_panic_streak);
+    char now[32], buf[320];
+    snprintf(buf, sizeof(buf),
+             "{\"t\":\"boot\",\"time\":\"%s\",\"up_s\":%lld,\"reset\":\"%s\",\"rtc_ram\":\"%s\",\"pmu_on\":\"%02x\","
+             "\"pmu_on_src\":\"%s\",\"pmu_off\":\"%02x\",\"pmu_off_src\":\"%s\",\"crash_streak\":%" PRIu32 "}",
+             timesync_now_str(now, sizeof(now)), (long long)(esp_timer_get_time() / 1000000), why, rtc, on, on_txt, off, off_txt,
+             s_panic_streak);
+    sdlog_aux_write(1, buf);
 }
 
 void app_main(void)
@@ -579,9 +666,7 @@ void app_main(void)
 
     s_panic_streak = 0; /* made it through start-up: a later crash starts a new count */
 
-    char status[48];
-    snprintf(status, sizeof(status), "listening: %u words%s", (unsigned)s_book.count, s_files_ok ? " from SD" : ", built-in");
-    cards_status(status);
+    normal_status();
 
     TickType_t last_beat = xTaskGetTickCount();
     TickType_t last_word_tick = 0;
@@ -614,21 +699,26 @@ void app_main(void)
                 enter_maint();
                 action = s_maint ? "maint_in" : "maint_failed";
             }
-        } else if ((bev == BUTTON_SHORT || cmd == 's') && !s_maint) {
-            /* A press on a dark or dimmed screen means "wake up", never "go to sleep":
-             * the same button doing both sent a dimmed board to sleep when a person
-             * was trying to wake it. Sleep only from a fully lit screen. */
+        } else if (bev == BUTTON_SHORT && !s_maint) {
+            /* BOOT wakes, and only wakes. It used to sleep a lit screen as well, and on
+             * 2026-09-06 the user's own presses put the board to sleep twice in twelve
+             * seconds; with "brighten" invisible on a bright screen that read as "black
+             * screen, no response to any button". Sleep is the quiet timer's or the
+             * serial `s`'s job, and every press now says something on the status line. */
             if (s_asleep) {
-                leave_sleep();
+                leave_sleep(true);
                 action = "wake";
-            } else if (s_dimmed || xTaskGetTickCount() - s_woke_at < pdMS_TO_TICKS(3000)) {
-                /* A press on a dim screen, or a second press right after waking, is
-                 * someone making sure it is on. Never sleep on those (09:39: two presses
-                 * 1.7 s apart, the second put a just-woken board to sleep). */
-                wake_screen();
-                action = "brighten";
             } else {
-                enter_sleep("button");
+                action = s_dimmed ? "brighten" : "awake";
+                wake_screen();
+            }
+            show_ack("awake - hold BOOT for setup");
+        } else if (cmd == 's' && !s_maint) {
+            if (s_asleep) {
+                leave_sleep(true);
+                action = "wake";
+            } else {
+                enter_sleep("serial");
                 action = "sleep";
             }
         } else if (cmd == 'r' && sdcard_present()) {
@@ -704,7 +794,12 @@ void app_main(void)
             if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
                 tap_record("ignored_asleep"); /* the glass still reports with the panel dark */
             }
+            pmu_poll(); /* USB in/out and the battery curve are recorded through a sleep as well */
             continue; /* nothing else runs while asleep; the loop still turns for the button and card */
+        }
+        if (s_ack_until && (int32_t)(xTaskGetTickCount() - s_ack_until) >= 0) {
+            s_ack_until = 0;
+            normal_status();
         }
         if (xSemaphoreTake(s_tap, 0) == pdTRUE) {
             /* Tap: wake the screen if it has dimmed. Nothing else; taps make no sound. */

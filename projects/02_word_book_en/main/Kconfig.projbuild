@@ -81,8 +81,25 @@ menu "Word book"
         default 10
         help
             After this long with no word, the display goes fully off and the
-            recogniser is paused. Press BOOT to wake. BOOT also puts it to
-            sleep at any time.
+            recogniser is stopped. Press BOOT to wake. BOOT never sleeps it;
+            the serial `s` command does.
+
+    config WORDBOOK_LONG_PRESS_MS
+        int "BOOT hold time for maintenance mode (ms)"
+        range 300 5000
+        default 1000
+        help
+            A shorter hold is a short press: wake the screen, or acknowledge on
+            the status line. 2026-09-06: holds of 1.25 s meant as long fell
+            under the old 1.5 s threshold.
+
+    config WORDBOOK_SLEEP_POWER_LOG_S
+        int "Seconds between state records while asleep"
+        range 30 3600
+        default 300
+        help
+            Awake, a record is written every WORDBOOK_POWER_LOG_S seconds. Asleep
+            the cadence drops to this: enough for the battery curve overnight.
 
     config WORDBOOK_TZ
         string "Time zone (POSIX TZ string)"

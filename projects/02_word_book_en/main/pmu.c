@@ -15,6 +15,8 @@ static const char *TAG = "pmu";
 #define REG_STATUS1       0x00 /* bit5 VBUS good, bit3 battery present */
 #define REG_STATUS2       0x01 /* bits7:5 = 001 charging; bit3 = 1 means no VBUS; bits2:0 charge state */
 #define REG_CHIP_ID       0x03 /* 0x4a */
+#define REG_PWRON_STATUS  0x20 /* why the PMU last powered on; holds until the next power-on */
+#define REG_PWROFF_STATUS 0x21 /* why it last powered off; holds until the PMU itself loses power */
 #define REG_ADC_ENABLE    0x30 /* bit0 VBAT, bit2 VBUS, bit3 VSYS, bit4 die temp */
 #define REG_ADC_VBAT      0x34 /* H5L8 */
 #define REG_ADC_VBUS      0x38 /* H6L8 */
@@ -29,6 +31,7 @@ static const char *TAG = "pmu";
 static i2c_master_dev_handle_t s_dev;
 static bool s_ready, s_last_vbus;
 static int64_t s_last_poll_us;
+static int s_record_period_s = CONFIG_WORDBOOK_POWER_LOG_S;
 
 static esp_err_t rd(uint8_t reg, uint8_t *val)
 {
@@ -101,6 +104,9 @@ esp_err_t pmu_read(pmu_status_t *out)
     out->chg_state = s2 & 0x7;
     out->vbat_mv = out->batt_present ? rd16(REG_ADC_VBAT, 0x1F) : 0;
     out->vbus_mv = out->vbus_in ? rd16(REG_ADC_VBUS, 0x3F) : 0;
+    if (out->vbus_mv > 6000) {
+        out->vbus_mv = rd16(REG_ADC_VBUS, 0x3F); /* 16371 mV right at plug-in: the ADC had not settled */
+    }
     out->vsys_mv = rd16(REG_ADC_VSYS, 0x3F);
     out->batt_pct = pct & 0x7F;
     return ESP_OK;
@@ -187,9 +193,45 @@ bool pmu_poll(void)
         pmu_dump_rails(st.vbus_in ? "usb in" : "on battery");
         if (s_record_cb) s_record_cb(st.vbus_in ? "usb_in" : "usb_out");
         last_record_us = esp_timer_get_time();
-    } else if (esp_timer_get_time() - last_record_us >= (int64_t)CONFIG_WORDBOOK_POWER_LOG_S * 1000000) {
+    } else if (esp_timer_get_time() - last_record_us >= (int64_t)s_record_period_s * 1000000) {
         if (s_record_cb) s_record_cb("periodic");
         last_record_us = esp_timer_get_time();
     }
     return changed;
+}
+
+void pmu_set_record_period_s(int seconds)
+{
+    s_record_period_s = seconds > 0 ? seconds : CONFIG_WORDBOOK_POWER_LOG_S;
+}
+
+static void bits_to_text(uint8_t bits, const char *const names[8], char *out, size_t n)
+{
+    size_t len = 0;
+    out[0] = '\0';
+    for (int i = 0; i < 8 && len < n; i++) {
+        if (((bits >> i) & 1) && names[i]) {
+            len += snprintf(out + len, n - len, "%s%s", len ? "+" : "", names[i]);
+        }
+    }
+    if (out[0] == '\0') {
+        snprintf(out, n, "none");
+    }
+}
+
+void pmu_power_sources(uint8_t *on_bits, uint8_t *off_bits, char *on_txt, size_t on_n, char *off_txt, size_t off_n)
+{
+    /* REG 20 / REG 21 bit names, datasheet 6.13.2.18-19. */
+    static const char *const on_names[8] = {"pwr_key", "irq_pin", "vbus_insert", "battery_charged", "battery_insert", "en_high", NULL, NULL};
+    static const char *const off_names[8] = {"pwr_key_held", "software", "en_low", "vsys_undervoltage",
+                                             "vbus_overvoltage", "dcdc_undervoltage", "dcdc_overvoltage", "die_overtemp"};
+    uint8_t on = 0, off = 0;
+    if (s_ready) {
+        rd(REG_PWRON_STATUS, &on);
+        rd(REG_PWROFF_STATUS, &off);
+    }
+    if (on_bits) *on_bits = on;
+    if (off_bits) *off_bits = off;
+    if (on_txt) bits_to_text(on, on_names, on_txt, on_n);
+    if (off_txt) bits_to_text(off, off_names, off_txt, off_n);
 }
