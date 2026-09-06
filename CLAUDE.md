@@ -345,6 +345,15 @@ So the display stack costs roughly **129 KB internal and 149 KB PSRAM**. Interna
 the scarce resource; anything large goes to PSRAM with `MALLOC_CAP_SPIRAM`. Both figures
 above were flat across repeated 10-second heartbeats — a drifting number means a leak.
 
+`02_word_book_en` runs with 56 KB internal free while listening and a 17 KB minimum in
+maintenance mode (Wi-Fi); its full accounting — flash partitions and the 5 MB left
+unallocated, what is in the 3.9 MB image, every internal-RAM and PSRAM user, card usage,
+and what a feature costs — is `docs/design/02_word_book_en_memory.md`. Two rules from it:
+`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384` means a plain `malloc()` under 16 KB lands in
+internal RAM, so allocate with `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` on purpose; and
+anything with a radio (Wi-Fi, BLE) is a mode that stops the recogniser, never a
+background feature.
+
 ## Expected log lines (a healthy boot)
 
 Do not chase these:

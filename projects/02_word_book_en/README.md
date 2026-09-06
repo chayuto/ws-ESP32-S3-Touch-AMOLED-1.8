@@ -2,6 +2,8 @@
 
 A voice-triggered picture book for a toddler: say a word, see the photo, hear it back.
 Design: [`docs/design/02_word_book_en.md`](../../docs/design/02_word_book_en.md).
+Memory and space — what is used, what is free, what a feature costs:
+[`docs/design/02_word_book_en_memory.md`](../../docs/design/02_word_book_en_memory.md).
 
 Built in milestones, each verified on hardware before the next.
 

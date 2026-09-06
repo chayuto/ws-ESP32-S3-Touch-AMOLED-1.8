@@ -143,6 +143,10 @@ language-locked.
 
 ## Budget
 
+The pre-build estimate, kept for the record. The measured accounting — partition table,
+image composition, internal versus PSRAM users, card usage and what a feature costs — is
+[`02_word_book_en_memory.md`](./02_word_book_en_memory.md) (2026-09-06).
+
 | Resource | Cost | Headroom |
 |---|---|---|
 | PSRAM: MultiNet7 2.9 MB + AFE ~0.3 MB + display stack 0.15 MB + 2 photo buffers 0.66 MB | ~4.0 MB | 4 MB spare of 8 |
