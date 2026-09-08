@@ -1,0 +1,600 @@
+#include "sdlog.h"
+
+#include "driver/usb_serial_jtag.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "esp_app_desc.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "sdcard.h"
+#include "sdkconfig.h"
+#include "timesync.h"
+
+static const char *TAG = "sdlog";
+
+#define RING_BYTES   (64 * 1024)
+#define LOG_LINE_MAX     512
+#define DRAIN_MS     250
+#define SYNC_MS      2000
+
+static vprintf_like_t s_console;
+static char *s_ring;
+static volatile size_t s_head, s_tail; /* head: next write; tail: next read */
+static size_t s_dropped;
+static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static FILE *s_file;
+static SemaphoreHandle_t s_file_mutex;
+static char s_path[96];
+static size_t s_written;
+/* Size at open, so the size queries need no stat(): one on the card costs tens of ms,
+ * and the state record asks for three of them every 30 s. */
+static long s_size_base;
+
+/* Aux channels: own rings, same drain task and mutex. */
+#define AUX_RING_BYTES (32 * 1024)
+typedef struct {
+    char *ring;
+    volatile size_t head, tail;
+    size_t dropped, written;
+    long size_base;
+    FILE *file;
+    char path[96];
+} aux_t;
+static aux_t s_aux[SDLOG_AUX_CHANNELS];
+
+static char s_dir[64];
+static uint32_t s_rotations, s_deletions;
+
+/*
+ * Rotate <path> to <path>.1, shifting existing generations up and dropping the
+ * one that falls off the end. Cheap: renames, no copying, and the card never has
+ * to hold two copies of the same data.
+ *
+ * 05_dictation kept exactly one old generation because its log was a debugging
+ * aid. Here the files ARE the product, so the retention depth is a setting and
+ * the only thing that removes data is running out of card.
+ */
+static void rotate_generations(const char *path, int keep)
+{
+    char from[128], to[128];
+    snprintf(to, sizeof(to), "%s.%d", path, keep);
+    unlink(to); /* the oldest falls off */
+    for (int i = keep - 1; i >= 1; i--) {
+        snprintf(from, sizeof(from), "%s.%d", path, i);
+        snprintf(to, sizeof(to), "%s.%d", path, i + 1);
+        rename(from, to); /* fails harmlessly when that generation does not exist */
+    }
+    snprintf(to, sizeof(to), "%s.1", path);
+    if (rename(path, to) == 0) {
+        s_rotations++;
+        ESP_LOGW(TAG, "rotated %s -> %s (%u rotations this run)", path, to, (unsigned)s_rotations);
+    }
+}
+
+/* Over the cap? Rotate before opening, so the new file starts empty. */
+static void rotate_if_large(const char *path, long cap_bytes)
+{
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > cap_bytes) {
+        rotate_generations(path, CONFIG_SENSOROUS_KEEP_FILES);
+    }
+}
+
+static void push(char *ring, size_t cap, volatile size_t *head, volatile size_t *tail, size_t *dropped,
+                 const char *s, size_t n)
+{
+    portENTER_CRITICAL(&s_lock);
+    size_t used = (*head + cap - *tail) % cap;
+    if (n >= cap - used - 1) {
+        (*dropped)++;
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            ring[*head] = s[i];
+            *head = (*head + 1) % cap;
+        }
+    }
+    portEXIT_CRITICAL(&s_lock);
+}
+
+static void ring_push(const char *s, size_t n)
+{
+    push(s_ring, RING_BYTES, &s_head, &s_tail, &s_dropped, s, n);
+}
+
+/* Move up to sizeof(chunk) bytes out of a ring; returns the count. */
+static size_t pull(char *ring, size_t cap, volatile size_t *head, volatile size_t *tail, char *chunk, size_t max)
+{
+    size_t n = 0;
+    portENTER_CRITICAL(&s_lock);
+    while (n < max && *tail != *head) {
+        chunk[n++] = ring[*tail];
+        *tail = (*tail + 1) % cap;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    return n;
+}
+
+/* Drain one ring into one file. Returns false on a write failure. */
+static bool drain(char *ring, size_t cap, volatile size_t *head, volatile size_t *tail, FILE *f, char *chunk,
+                  size_t chunk_len, size_t *written)
+{
+    for (;;) {
+        size_t n = pull(ring, cap, head, tail, chunk, chunk_len);
+        if (n == 0) {
+            return true;
+        }
+        if (fwrite(chunk, 1, n, f) != n) {
+            return false;
+        }
+        *written += n;
+    }
+}
+
+/* One static line buffer: esp_log serialises vprintf calls under its own lock, and
+ * a stack buffer here would land on every logging task's stack - the 2 KB system
+ * event task overflowed on it once DEBUG lines were compiled in. */
+static char s_line[LOG_LINE_MAX];
+
+/*
+ * The console write can block forever, and on 2026-09-06 it did.
+ *
+ * devcmd_init() installs the USB-Serial-JTAG driver, which switches the console onto
+ * the driver's VFS path - documented in usb_serial_jtag_vfs.h as "read and write are
+ * blocking". With no host draining the TX FIFO, the next log write never returns. The
+ * board looked alive because the LVGL task kept the screen refreshed, but app_main was
+ * stuck inside ESP_LOG: no serial, no button, no heartbeat, nothing.
+ *
+ * So: the card is written FIRST and unconditionally, and the console is written only
+ * when a host is actually attached. The flight recorder is the record that matters -
+ * it must never be lost because nobody happened to be watching the serial port. A
+ * device that lives on a battery, unplugged, is the normal case here, not the
+ * exception.
+ */
+static int hook(const char *fmt, va_list args)
+{
+    va_list copy;
+    va_copy(copy, args);
+
+    if (s_ring != NULL && !xPortInIsrContext()) {
+        char *line = s_line;
+        int n = vsnprintf(line, LOG_LINE_MAX, fmt, copy);
+        if (n > 0) {
+            if (n >= LOG_LINE_MAX) {
+                n = LOG_LINE_MAX - 1;
+            }
+            ring_push(line, (size_t)n);
+        }
+    }
+    va_end(copy);
+
+    /* Console last, and only to a host that is there to read it. */
+    if (!usb_serial_jtag_is_connected()) {
+        return 0;
+    }
+    return s_console(fmt, args);
+}
+
+static void drain_task(void *arg)
+{
+    (void)arg;
+    char chunk[1024];
+    int64_t last_sync = 0;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(DRAIN_MS));
+        bool any = s_file != NULL;
+        for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+            any |= s_aux[c].file != NULL;
+        }
+        if (!any) {
+            continue;
+        }
+        if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+            continue;
+        }
+        bool failed = false;
+        if (s_file && !drain(s_ring, RING_BYTES, &s_head, &s_tail, s_file, chunk, sizeof(chunk), &s_written)) {
+            failed = true;
+        }
+        for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+            aux_t *x = &s_aux[c];
+            if (x->file && x->ring && !drain(x->ring, AUX_RING_BYTES, &x->head, &x->tail, x->file, chunk, sizeof(chunk), &x->written)) {
+                failed = true;
+            }
+        }
+        if (!failed && esp_timer_get_time() - last_sync > SYNC_MS * 1000) {
+            last_sync = esp_timer_get_time();
+            if (s_file && (fflush(s_file) != 0 || fsync(fileno(s_file)) != 0)) {
+                failed = true;
+            }
+            for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+                if (s_aux[c].file && (fflush(s_aux[c].file) != 0 || fsync(fileno(s_aux[c].file)) != 0)) {
+                    failed = true;
+                }
+            }
+        }
+        if (failed) {
+            if (s_file) {
+                fclose(s_file);
+                s_file = NULL;
+            }
+            for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+                if (s_aux[c].file) {
+                    fclose(s_aux[c].file);
+                    s_aux[c].file = NULL;
+                }
+            }
+            xSemaphoreGive(s_file_mutex);
+            ESP_LOGW(TAG, "write to the card failed; log files closed");
+            sdcard_report_io_error();
+            continue;
+        }
+        xSemaphoreGive(s_file_mutex);
+    }
+}
+
+void sdlog_init(void)
+{
+    s_ring = heap_caps_malloc(RING_BYTES, MALLOC_CAP_SPIRAM);
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        s_aux[c].ring = heap_caps_malloc(AUX_RING_BYTES, MALLOC_CAP_SPIRAM);
+    }
+    s_file_mutex = xSemaphoreCreateMutex();
+    if (s_ring == NULL || s_file_mutex == NULL) {
+        ESP_LOGE(TAG, "no memory for the log ring; SD logging off");
+        return;
+    }
+    s_console = esp_log_set_vprintf(hook);
+    xTaskCreatePinnedToCore(drain_task, "sdlog", 4096, NULL, 2, NULL, 0);
+    ESP_LOGI(TAG, "capturing log lines (%d KB ring); file opens when a card is mounted", RING_BYTES / 1024);
+}
+
+esp_err_t sdlog_open(const char *path)
+{
+    if (s_ring == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (s_file != NULL) {
+        xSemaphoreGive(s_file_mutex);
+        return ESP_OK;
+    }
+    rotate_if_large(path, (long)CONFIG_SENSOROUS_LOG_MAX_KB * 1024);
+    struct stat st;
+    FILE *f = fopen(path, "a");
+    if (f == NULL) {
+        xSemaphoreGive(s_file_mutex);
+        ESP_LOGW(TAG, "cannot open %s for append", path);
+        return ESP_FAIL;
+    }
+    strlcpy(s_path, path, sizeof(s_path));
+    s_size_base = (stat(path, &st) == 0) ? (long)st.st_size : 0; /* the only stat of this file's life */
+    s_written = 0;
+    const esp_app_desc_t *app = esp_app_get_description();
+    char now[32];
+    fprintf(f, "\n===== boot: %s %s (IDF %s), reset reason %d, uptime %lld ms, time %s, ring dropped %u =====\n",
+            app->project_name, app->version, app->idf_ver, (int)esp_reset_reason(),
+            (long long)(esp_timer_get_time() / 1000), timesync_now_str(now, sizeof(now)), (unsigned)s_dropped);
+    s_file = f;
+    xSemaphoreGive(s_file_mutex);
+    ESP_LOGI(TAG, "appending to %s", path);
+    return ESP_OK;
+}
+
+void sdlog_close(void)
+{
+    if (s_file_mutex == NULL || xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return;
+    }
+    if (s_file != NULL) {
+        fclose(s_file); /* may fail if the card is already gone; nothing to do about it */
+        s_file = NULL;
+        ESP_LOGI(TAG, "log file closed (%u bytes written this session)", (unsigned)s_written);
+    }
+    xSemaphoreGive(s_file_mutex);
+}
+
+bool sdlog_active(void)
+{
+    return s_file != NULL;
+}
+
+const char *sdlog_path(void)
+{
+    return s_path;
+}
+
+long sdlog_size(void)
+{
+    /* Tracked, not stat()ed: size at open plus what the drain task has written since. */
+    return s_file ? s_size_base + (long)s_written : 0; /* 0 with no file open, as before */
+}
+
+esp_err_t sdlog_truncate(void)
+{
+    if (!s_path[0]) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char path[96];
+    strlcpy(path, s_path, sizeof(path));
+    sdlog_close();
+    unlink(path);
+    for (int i = 1; i <= CONFIG_SENSOROUS_KEEP_FILES; i++) {
+        char old[128];
+        snprintf(old, sizeof(old), "%s.%d", path, i);
+        unlink(old);
+    }
+    esp_err_t err = sdlog_open(path);
+    ESP_LOGI(TAG, "log truncated");
+    return err;
+}
+
+esp_err_t sdlog_aux_open(int ch, const char *path)
+{
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS || s_aux[ch].ring == NULL || s_file_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    aux_t *x = &s_aux[ch];
+    if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (x->file != NULL) {
+        xSemaphoreGive(s_file_mutex);
+        return ESP_OK;
+    }
+    rotate_if_large(path, (long)CONFIG_SENSOROUS_DATA_MAX_KB * 1024);
+    FILE *f = fopen(path, "a");
+    if (f == NULL) {
+        xSemaphoreGive(s_file_mutex);
+        ESP_LOGW(TAG, "cannot open %s for append", path);
+        return ESP_FAIL;
+    }
+    strlcpy(x->path, path, sizeof(x->path));
+    struct stat st;
+    x->size_base = (stat(path, &st) == 0) ? (long)st.st_size : 0;
+    x->written = 0;
+    x->file = f;
+    xSemaphoreGive(s_file_mutex);
+    ESP_LOGI(TAG, "appending records to %s", path);
+    return ESP_OK;
+}
+
+void sdlog_aux_close(int ch)
+{
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS || s_file_mutex == NULL || xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        return;
+    }
+    aux_t *x = &s_aux[ch];
+    if (x->file != NULL) {
+        fclose(x->file);
+        x->file = NULL;
+        ESP_LOGI(TAG, "record file %d closed", ch);
+    }
+    xSemaphoreGive(s_file_mutex);
+}
+
+void sdlog_aux_write(int ch, const char *line)
+{
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS || s_aux[ch].ring == NULL) {
+        return;
+    }
+    aux_t *x = &s_aux[ch];
+    push(x->ring, AUX_RING_BYTES, &x->head, &x->tail, &x->dropped, line, strlen(line));
+    push(x->ring, AUX_RING_BYTES, &x->head, &x->tail, &x->dropped, "\n", 1);
+}
+
+bool sdlog_aux_active(int ch)
+{
+    return ch >= 0 && ch < SDLOG_AUX_CHANNELS && s_aux[ch].file != NULL;
+}
+
+const char *sdlog_aux_path(int ch)
+{
+    return (ch >= 0 && ch < SDLOG_AUX_CHANNELS) ? s_aux[ch].path : "";
+}
+
+long sdlog_aux_size(int ch)
+{
+    if (ch < 0 || ch >= SDLOG_AUX_CHANNELS) {
+        return 0;
+    }
+    return s_aux[ch].file ? s_aux[ch].size_base + (long)s_aux[ch].written : 0;
+}
+
+esp_err_t sdlog_aux_truncate(int ch)
+{
+    const char *p = sdlog_aux_path(ch);
+    if (!p[0]) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char path[96];
+    strlcpy(path, p, sizeof(path));
+    sdlog_aux_close(ch);
+    unlink(path);
+    for (int i = 1; i <= CONFIG_SENSOROUS_KEEP_FILES; i++) {
+        char old[128];
+        snprintf(old, sizeof(old), "%s.%d", path, i);
+        unlink(old);
+    }
+    return sdlog_aux_open(ch, path);
+}
+
+size_t sdlog_dropped(void)
+{
+    size_t n = s_dropped;
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        n += s_aux[c].dropped;
+    }
+    return n;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Log management                                                            */
+/* ------------------------------------------------------------------------- */
+
+static const char *aux_basename(int ch)
+{
+    switch (ch) {
+        case SDLOG_CH_SENSORS: return "sensors.jsonl";
+        case SDLOG_CH_RADIO: return "radio.jsonl";
+        case SDLOG_CH_POWER: return "power.jsonl";
+        case SDLOG_CH_EVENTS: return "events.jsonl";
+        default: return "other.jsonl";
+    }
+}
+
+/* Close, rotate, reopen. The rings keep filling across the gap. */
+static bool roll(int ch)
+{
+    if (ch < 0) {
+        char path[96];
+        strlcpy(path, s_path, sizeof(path));
+        sdlog_close();
+        rotate_generations(path, CONFIG_SENSOROUS_KEEP_FILES);
+        return sdlog_open(path) == ESP_OK;
+    }
+    char path[96];
+    strlcpy(path, s_aux[ch].path, sizeof(path));
+    sdlog_aux_close(ch);
+    rotate_generations(path, CONFIG_SENSOROUS_KEEP_FILES);
+    return sdlog_aux_open(ch, path) == ESP_OK;
+}
+
+/*
+ * Free the oldest generation there is. Walks from the retention depth downwards
+ * so the least recent data goes first, whichever family it belongs to. Returns
+ * true if something was deleted.
+ */
+static bool drop_oldest(void)
+{
+    if (!s_dir[0]) {
+        return false;
+    }
+    const char *bases[SDLOG_AUX_CHANNELS + 1];
+    char logbase[64];
+    strlcpy(logbase, "sensorous.log", sizeof(logbase));
+    bases[0] = logbase;
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        bases[c + 1] = aux_basename(c);
+    }
+    for (int gen = CONFIG_SENSOROUS_KEEP_FILES; gen >= 1; gen--) {
+        for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+            char path[160];
+            struct stat st;
+            snprintf(path, sizeof(path), "%s/%s.%d", s_dir, bases[i], gen);
+            if (stat(path, &st) == 0) {
+                if (unlink(path) == 0) {
+                    s_deletions++;
+                    ESP_LOGW(TAG, "card is low: deleted %s (%ld bytes). %u deletions this run", path,
+                             (long)st.st_size, (unsigned)s_deletions);
+                    return true;
+                }
+            }
+        }
+    }
+    ESP_LOGE(TAG, "card is low and there is nothing rotated left to delete - the live files keep growing");
+    return false;
+}
+
+bool sdlog_maintain(void)
+{
+    static int64_t last_us;
+    static int64_t last_space_us;
+    int64_t now = esp_timer_get_time();
+    if (now - last_us < 10 * 1000 * 1000) {
+        return false;
+    }
+    last_us = now;
+    if (!sdcard_present()) {
+        return false;
+    }
+
+    bool did = false;
+
+    /* Sizes are tracked, not stat()ed - see s_size_base. */
+    if (sdlog_active() && sdlog_size() > (long)CONFIG_SENSOROUS_LOG_MAX_KB * 1024) {
+        ESP_LOGI(TAG, "%s reached %ld KB", sdlog_path(), sdlog_size() / 1024);
+        did |= roll(-1);
+    }
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        if (sdlog_aux_active(c) && sdlog_aux_size(c) > (long)CONFIG_SENSOROUS_DATA_MAX_KB * 1024) {
+            ESP_LOGI(TAG, "%s reached %ld KB", sdlog_aux_path(c), sdlog_aux_size(c) / 1024);
+            did |= roll(c);
+        }
+    }
+
+    /* Free space costs a FAT walk, so it is asked for every five minutes rather
+     * than every ten seconds. Between checks, the caps above bound the growth. */
+    if (now - last_space_us > 300 * 1000 * 1000) {
+        last_space_us = now;
+        sdcard_refresh_space();
+        uint32_t total_mb = 0, free_mb = 0;
+        sdcard_space(&total_mb, &free_mb);
+        ESP_LOGI(TAG, "card: %u of %u MB free", (unsigned)free_mb, (unsigned)total_mb);
+        while (free_mb > 0 && free_mb < CONFIG_SENSOROUS_CARD_MIN_FREE_MB) {
+            if (!drop_oldest()) {
+                break;
+            }
+            did = true;
+            sdcard_refresh_space();
+            sdcard_space(&total_mb, &free_mb);
+        }
+    }
+    return did;
+}
+
+void sdlog_maintenance_counts(uint32_t *rotations, uint32_t *deletions)
+{
+    if (rotations) *rotations = s_rotations;
+    if (deletions) *deletions = s_deletions;
+}
+
+void sdlog_close_all(void)
+{
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        sdlog_aux_close(c);
+    }
+    sdlog_close();
+}
+
+esp_err_t sdlog_open_all(const char *dir)
+{
+    struct stat st;
+    if (stat(dir, &st) != 0) {
+        if (mkdir(dir, 0777) != 0) {
+            ESP_LOGE(TAG, "cannot create %s", dir);
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "created %s", dir);
+    }
+    strlcpy(s_dir, dir, sizeof(s_dir));
+
+    char path[160];
+    snprintf(path, sizeof(path), "%s/sensorous.log", dir);
+    esp_err_t err = sdlog_open(path);
+    for (int c = 0; c < SDLOG_AUX_CHANNELS; c++) {
+        snprintf(path, sizeof(path), "%s/%s", dir, aux_basename(c));
+        esp_err_t e = sdlog_aux_open(c, path);
+        if (e != ESP_OK) {
+            err = e;
+        }
+    }
+    return err;
+}
+
+const char *sdlog_dir(void)
+{
+    return s_dir;
+}

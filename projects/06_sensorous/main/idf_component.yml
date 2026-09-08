@@ -1,0 +1,11 @@
+version: "0.1.0"
+
+dependencies:
+  idf: ">=5.5,<6.1"
+  waveshare/esp32_s3_touch_amoled_1_8:
+    version: "^2.0.3"
+    public: true
+  # QMI8658 6-axis IMU. Takes the BSP's i2c_master bus handle, so it sits on the
+  # shared bus with the PMU, the RTC and the touch controller.
+  waveshare/qmi8658:
+    version: "^1.0.1"

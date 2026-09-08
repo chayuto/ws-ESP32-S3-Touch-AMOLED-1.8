@@ -1,0 +1,8 @@
+# Name,     Type, SubType, Offset,  Size,   Flags
+# No speech models here, so 05's 6 MB `model` partition is gone. 4 MB of app is
+# roughly twice what LVGL + Wi-Fi + NimBLE come to; the rest of the 16 MB stays
+# unallocated on purpose, because the data lives on the card, not in flash.
+nvs,        data, nvs,     0x9000,  0x6000,
+phy_init,   data, phy,     0xf000,  0x1000,
+factory,    app,  factory, 0x10000, 4M,
+storage,    data, spiffs,  ,        512K,

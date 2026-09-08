@@ -1,0 +1,282 @@
+menu "Sensorous"
+
+    comment "Modes"
+
+    choice SENSOROUS_MODE_DEFAULT
+        prompt "Mode at boot"
+        default SENSOROUS_MODE_DEFAULT_STATIONARY
+        help
+            STATIONARY assumes wall power and a fixed place: slow cadence, no sleep,
+            one location fix is representative. MOBILE assumes battery and movement:
+            fast cadence, every scan carries its own fix, the screen dims.
+            Either way the mode is switchable at runtime (BOOT short press, serial 'M').
+
+    config SENSOROUS_MODE_DEFAULT_STATIONARY
+        bool "Stationary"
+
+    config SENSOROUS_MODE_DEFAULT_MOBILE
+        bool "Mobile"
+
+    endchoice
+
+    comment "Sensor cadence"
+
+    config SENSOROUS_SENSE_MS_STATIONARY
+        int "Sensor sample period in stationary mode, ms"
+        range 200 600000
+        default 10000
+
+    config SENSOROUS_SENSE_MS_MOBILE
+        int "Sensor sample period in mobile mode, ms"
+        range 200 600000
+        default 1000
+
+    config SENSOROUS_IMU_HZ
+        int "IMU output data rate, Hz"
+        range 1 500
+        default 100
+        help
+            The QMI8658 runs continuously at this rate; the sensor record carries the
+            mean, the peak and the RMS since the last record, not one instantaneous
+            sample. A single sample at a 10 s cadence would miss every event worth
+            logging.
+
+    config SENSOROUS_SOUND
+        bool "Measure the ambient sound level"
+        default y
+        help
+            A level, in dBFS, and nothing else. The microphone is opened for the
+            burst below and closed again immediately, so the board is not
+            capturing between measurements; no audio is stored, transmitted, or
+            examined for content. See sound.h for how that is enforced rather
+            than promised.
+
+    config SENSOROUS_SOUND_MS
+        int "Length of each sound burst, ms"
+        depends on SENSOROUS_SOUND
+        range 20 2000
+        default 200
+        help
+            Long enough to average out a single transient, short enough that the
+            mic is off for 98% of a 10 s cadence. Nothing about a 200 ms window
+            is reconstructable as speech, and nothing keeps it anyway.
+
+    config SENSOROUS_SOUND_SETTLE_MS
+        int "Discard this much at the start of each burst, ms"
+        depends on SENSOROUS_SOUND
+        range 0 500
+        default 50
+        help
+            The ES8311's ADC has a start-up transient after every open. Measuring
+            it would measure the codec, not the room.
+
+    config SENSOROUS_MIC_GAIN_DB
+        int "Microphone gain, dB"
+        depends on SENSOROUS_SOUND
+        range 0 42
+        default 30
+        help
+            30 dB is the value 02_word_book_en found workable on this board.
+            A record that reports clipped samples means this is too high here.
+
+    comment "Radio census"
+
+    config SENSOROUS_SCAN_S_STATIONARY
+        int "Seconds between radio scan cycles, stationary mode"
+        range 5 3600
+        default 60
+
+    config SENSOROUS_SCAN_S_MOBILE
+        int "Seconds between radio scan cycles, mobile mode"
+        range 5 3600
+        default 10
+
+    config SENSOROUS_WIFI_SCAN
+        bool "Scan for Wi-Fi access points"
+        default y
+
+    config SENSOROUS_WIFI_SCAN_ACTIVE
+        bool "Active Wi-Fi scan (transmit probe requests)"
+        depends on SENSOROUS_WIFI_SCAN
+        default n
+        help
+            Passive listens for beacons only and is silent on the air; active probes
+            and finds hidden or quiet APs faster. Passive is the default because a
+            logger should not announce itself, and because Google's geolocation API
+            wants BSSIDs it can match, which beacons already carry.
+
+    config SENSOROUS_WIFI_DWELL_MS
+        int "Per-channel dwell, ms"
+        depends on SENSOROUS_WIFI_SCAN
+        range 40 1500
+        default 150
+        help
+            Beacons are typically 102.4 ms apart, so under ~120 ms a channel can be
+            missed entirely. 150 ms across 13 channels is about 2 s per sweep.
+
+    config SENSOROUS_BLE_SCAN
+        bool "Scan for BLE advertisers"
+        default y
+
+    config SENSOROUS_BLE_WINDOW_MS
+        int "How long each BLE listening window lasts, ms"
+        depends on SENSOROUS_BLE_SCAN
+        range 500 60000
+        default 4000
+        help
+            Wi-Fi and BLE share one antenna and one radio. They are never scanned at
+            the same time here: a cycle is a Wi-Fi sweep, then this window, then idle.
+
+    config SENSOROUS_BLE_SCAN_ACTIVE
+        bool "Active BLE scan (request scan responses)"
+        depends on SENSOROUS_BLE_SCAN
+        default n
+        help
+            Passive hears advertisements only. Active additionally sends a scan
+            request, which is what makes most devices reveal their complete local
+            name. Off by default for the same reason as the Wi-Fi one: a logger
+            that transmits is no longer only observing.
+
+    config SENSOROUS_BLE_WINDOW_DEVS
+        int "Distinct devices tracked within one BLE window"
+        depends on SENSOROUS_BLE_SCAN
+        range 16 1024
+        default 192
+        help
+            Adverts are aggregated per device per window so the card gets one row
+            per device rather than one per advert. Beyond this many distinct
+            devices in a single window, the extras are still counted and still
+            reach the census, but do not get their own row.
+
+    config SENSOROUS_CENSUS_WIFI_MAX
+        int "Wi-Fi BSSIDs remembered across the run"
+        range 32 2048
+        default 512
+
+    config SENSOROUS_CENSUS_BLE_MAX
+        int "BLE addresses remembered across the run"
+        range 32 4096
+        default 1024
+        help
+            Most phones and watches rotate a resolvable private address every ~15
+            minutes, so this table fills with single-sighting entries in a crowd. The
+            address type is recorded so analysis can drop them; PSRAM pays for it.
+
+    comment "Storage"
+
+    config SENSOROUS_LOG_MAX_KB
+        int "Rotate the flight recorder at this size, KB"
+        range 64 262144
+        default 4096
+
+    config SENSOROUS_DATA_MAX_KB
+        int "Rotate each data file at this size, KB"
+        range 64 262144
+        default 8192
+
+    config SENSOROUS_KEEP_FILES
+        int "Keep this many rotated generations of each file"
+        range 1 64
+        default 8
+
+    config SENSOROUS_CARD_MIN_FREE_MB
+        int "Delete the oldest rotated file below this much free space, MB"
+        range 8 8192
+        default 64
+        help
+            A card that fills silently stops the log without stopping the board, which
+            is the failure that looks like everything is fine. Below this line the
+            oldest generation is deleted and the deletion is logged loudly.
+
+    config SENSOROUS_SYNC_S
+        int "fsync the open files every N seconds"
+        range 1 120
+        default 2
+        help
+            The card can be pulled at any moment; this is how much data that costs.
+
+    comment "Network"
+
+    config SENSOROUS_WIFI_SSID
+        string "Home network SSID, for maintenance mode and NTP"
+        default ""
+        help
+            Leave empty here. Real credentials belong in sdkconfig.defaults.local,
+            which is gitignored - see the credential pattern in CLAUDE.md.
+
+    config SENSOROUS_WIFI_PASSWORD
+        string "Home network password"
+        default ""
+
+    config SENSOROUS_NTP
+        bool "Set the clock from NTP at boot"
+        default y
+
+    config SENSOROUS_NTP_SERVER
+        string "NTP server"
+        depends on SENSOROUS_NTP
+        default "pool.ntp.org"
+
+    config SENSOROUS_NTP_TIMEOUT_S
+        int "Give up on NTP after this long, s"
+        depends on SENSOROUS_NTP
+        range 2 60
+        default 10
+
+    config SENSOROUS_TZ
+        string "POSIX timezone string"
+        default "UTC0"
+        help
+            Records are written in UTC regardless; this only affects what the screen
+            shows. Perth is "AWST-8".
+
+    comment "Interface"
+
+    config SENSOROUS_BRIGHTNESS
+        int "Screen brightness, percent"
+        range 5 100
+        default 85
+
+    config SENSOROUS_LONG_PRESS_MS
+        int "Hold BOOT this long for maintenance mode, ms"
+        range 300 5000
+        default 1200
+
+    comment "Power and heat"
+
+    config SENSOROUS_POWER_LOG_S
+        int "Seconds between power records"
+        range 5 3600
+        default 60
+
+    config SENSOROUS_PMU_TREG_C
+        int "AXP2101 charge-throttle temperature, C"
+        range 60 100
+        default 60
+
+    config SENSOROUS_THERMAL_WARM_C
+        int "Dim the screen at this die temperature, C"
+        range 40 90
+        default 60
+
+    config SENSOROUS_THERMAL_HOT_C
+        int "Stop scanning and charging at this die temperature, C"
+        range 45 95
+        default 70
+
+    config SENSOROUS_THERMAL_TRIP_C
+        int "Power the board off at this die temperature, C"
+        range 50 100
+        default 80
+
+    config SENSOROUS_THERMAL_HYST_C
+        int "Drop back a level only this far below the line, C"
+        range 1 20
+        default 5
+
+    config SENSOROUS_THERMAL_SAMPLES
+        int "Consecutive seconds that must agree before a level changes"
+        range 1 60
+        default 3
+
+endmenu

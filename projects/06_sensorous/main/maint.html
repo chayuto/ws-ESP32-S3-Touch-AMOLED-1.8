@@ -1,0 +1,144 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sensorous</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #0d0f12; color: #e6e8ea;
+         font: 14px/1.5 -apple-system, system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+       color: #9aa0a6; margin: 22px 0 8px; font-weight: 600; }
+  .sub { color: #9aa0a6; margin-bottom: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .card { background: #15181d; border: 1px solid #242830; border-radius: 8px; padding: 10px 12px; }
+  .k { color: #9aa0a6; font-size: 12px; }
+  .v { font-size: 19px; font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #242830; font-size: 13px; }
+  th { color: #9aa0a6; font-weight: 600; }
+  td.num { text-align: right; }
+  a { color: #6fd3ff; }
+  button { background: #1d2129; color: #e6e8ea; border: 1px solid #333a45;
+           border-radius: 6px; padding: 7px 13px; font-size: 13px; cursor: pointer; margin-right: 6px; }
+  button:hover { background: #262c36; }
+  button.warn { border-color: #6b4a1f; color: #ffd166; }
+  .tabs button.on { background: #2a3038; border-color: #4da3ff; }
+  pre { background: #15181d; border: 1px solid #242830; border-radius: 8px;
+        padding: 10px; overflow: auto; max-height: 320px; font-size: 12px; }
+  .note { color: #ffd166; }
+</style>
+
+<h1>Sensorous</h1>
+<div class="sub" id="head">connecting…</div>
+
+<div class="grid" id="cards"></div>
+
+<h2>Files on the card</h2>
+<div id="files">…</div>
+
+<h2>Address census</h2>
+<div class="tabs">
+  <button id="tw" class="on" onclick="showCensus('wifi')">Wi-Fi</button>
+  <button id="tb" onclick="showCensus('ble')">Bluetooth</button>
+</div>
+<div id="census">…</div>
+
+<h2>Flight recorder, last 32 KB</h2>
+<pre id="log">…</pre>
+
+<h2>Card and board</h2>
+<button class="warn" onclick="post('/api/eject', 'Close the files and unmount, so the card can be pulled?')">Eject card</button>
+<button onclick="post('/api/mount')">Mount card</button>
+<button onclick="post('/api/dump')">Write census to card</button>
+<button class="warn" onclick="post('/api/reboot', 'Reboot the board?')">Reboot</button>
+<div class="sub" id="acted"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString();
+
+function bytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+
+async function refresh() {
+  try {
+    const m = await (await fetch('/api/metrics')).json();
+    const s = await (await fetch('/api/state')).json();
+    $('head').textContent =
+      `${s.mode} · up ${Math.floor(m.uptime_s / 3600)}h ${Math.floor(m.uptime_s / 60) % 60}m · ` +
+      `v${m.app.version} built ${m.app.built}`;
+    const card = m.card.ejected ? 'ejected' : (m.card.present ? bytes(m.card.free_mb * 1048576) + ' free' : 'NO CARD');
+    $('cards').innerHTML = [
+      ['Wi-Fi addresses', fmt(m.census.wifi), `${fmt(m.census.wifi_sightings)} sightings`],
+      ['BLE addresses', fmt(m.census.ble), `${fmt(m.census.ble_sightings)} sightings`],
+      ['Scan cycles', fmt(s.scans), `${s.wifi_last} / ${s.ble_last} last cycle`],
+      ['Records', fmt(m.records.sensor + m.records.radio + m.records.event),
+        `${fmt(m.records.sensor)} sensor · ${fmt(m.records.radio)} radio`],
+      ['Card', card, `${m.card.rotations} rotations · ${m.card.deletions} deleted`],
+      ['Battery', m.power.batt_pct + '%', m.power.charging ? 'charging' : (m.power.vbus ? 'on USB' : 'on battery')],
+      ['Board', m.temp.board_c.toFixed(1) + ' °C', `chip ${m.temp.chip_c.toFixed(1)} · pmu ${m.temp.pmu_c.toFixed(1)} · ${m.temp.level}`],
+      ['Free RAM', bytes(m.heap.internal_free), `min ${bytes(m.heap.internal_min)} · psram ${bytes(m.heap.psram_free)}`],
+    ].map(([k, v, sub]) =>
+      `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="k">${sub}</div></div>`).join('');
+    if (m.card.drops > 0) {
+      $('head').innerHTML += ` <span class="note">· ${fmt(m.card.drops)} log lines dropped</span>`;
+    }
+  } catch (e) { $('head').textContent = 'board not answering: ' + e; }
+}
+
+async function refreshFiles() {
+  try {
+    const f = await (await fetch('/api/files')).json();
+    if (!f.files.length) { $('files').innerHTML = `<div class="sub">${f.note || 'nothing here'}</div>`; return; }
+    f.files.sort((a, b) => a.name.localeCompare(b.name));
+    $('files').innerHTML = '<table><tr><th>Name</th><th class="num">Size</th></tr>' +
+      f.files.map(x =>
+        `<tr><td><a href="/api/file?name=${encodeURIComponent(x.name)}" download="${x.name}">${x.name}</a></td>` +
+        `<td class="num">${bytes(x.bytes)}</td></tr>`).join('') +
+      `</table><div class="sub">${f.dir} · ${fmt(f.free_mb)} of ${fmt(f.total_mb)} MB free</div>`;
+  } catch (e) { $('files').textContent = String(e); }
+}
+
+async function showCensus(kind) {
+  $('tw').className = kind === 'wifi' ? 'on' : '';
+  $('tb').className = kind === 'ble' ? 'on' : '';
+  try {
+    const c = await (await fetch('/api/census?kind=' + kind)).json();
+    c.rows.sort((a, b) => b.rssi_best - a.rssi_best);
+    const head = kind === 'wifi'
+      ? '<tr><th>BSSID</th><th>SSID</th><th class="num">Ch</th><th class="num">Best</th><th class="num">Now</th><th class="num">Seen</th></tr>'
+      : '<tr><th>Address</th><th>Type</th><th>Name</th><th class="num">Co.</th><th class="num">Best</th><th class="num">Seen</th></tr>';
+    const rows = c.rows.map(r => kind === 'wifi'
+      ? `<tr><td>${r.macAddress}</td><td>${r.ssid || '<i>hidden</i>'}</td><td class="num">${r.channel}</td>` +
+        `<td class="num">${r.rssi_best}</td><td class="num">${r.signalStrength}</td><td class="num">${fmt(r.sightings)}</td></tr>`
+      : `<tr><td>${r.macAddress}</td><td>${r.addrType}</td><td>${r.name || ''}</td>` +
+        `<td class="num">${r.company < 0 ? '' : r.company}</td><td class="num">${r.rssi_best}</td><td class="num">${fmt(r.sightings)}</td></tr>`
+    ).join('');
+    $('census').innerHTML = `<div class="sub">${fmt(c.count)} addresses, strongest first` +
+      (kind === 'ble' ? ' · <span class="note">rpa rows rotate every ~15 min and will not be seen again</span>' : '') +
+      `</div><table>${head}${rows}</table>`;
+  } catch (e) { $('census').textContent = String(e); }
+}
+
+async function refreshLog() {
+  try { $('log').textContent = await (await fetch('/api/log')).text(); }
+  catch (e) { $('log').textContent = String(e); }
+}
+
+async function post(url, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  try {
+    const r = await (await fetch(url, { method: 'POST' })).json();
+    $('acted').textContent = url + ': ' + (r.note || 'ok');
+    setTimeout(() => { refresh(); refreshFiles(); }, 1500);
+  } catch (e) { $('acted').textContent = String(e); }
+}
+
+refresh(); refreshFiles(); showCensus('wifi'); refreshLog();
+setInterval(refresh, 5000);
+setInterval(refreshFiles, 20000);
+</script>
