@@ -320,5 +320,5 @@ None of these block M0.
 - JDY-33 manual: <https://manuals.plus/shenzhen/2axm8-jdy-33-dual-mode-bluetoothserial-porttransparent-transmission-module-manual>
 - Demo code audited (linked from the Pico2Go wiki): <https://files.waveshare.com/wiki/PicoGo/PicoGo_Code_V2.zip>
 - Schematic to verify pins against: <https://files.waveshare.com/upload/8/8b/PicoGo_Schematic_V2.pdf>
-- In-repo precedent: `ESP32-C6-Touch-AMOLED-1.8/projects/16_bitchat_relay` (NimBLE advertiser),
+- In-repo precedent: `ws-ESP32-C6-Touch-AMOLED-1.8/projects/16_bitchat_relay` (NimBLE advertiser),
   `.../18_govee_monitor` (NimBLE observer parsing manufacturer data)

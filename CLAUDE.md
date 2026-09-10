@@ -446,7 +446,7 @@ frequency and the partition table. Use ours.
 
 ## Differences from Sibling Repos
 
-| | **this repo** | `ws-ESP32-S3-CAM` | `ESP32-C6-Touch-AMOLED-1.8` |
+| | **this repo** | `ws-ESP32-S3-CAM` | `ws-ESP32-C6-Touch-AMOLED-1.8` |
 |---|---|---|---|
 | Target | `esp32s3` | `esp32s3` | `esp32c6` |
 | Cores | 2 (Xtensa LX7) | 2 (Xtensa LX7) | 1 (RISC-V) |

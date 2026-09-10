@@ -295,8 +295,8 @@ Almost all of it. That was the point of asking.
 |---|---|
 | `05_dictation` | `sdlog` flight recorder and record channels, `sdcard`, `pmu`, `thermal`, `timesync`, `pcf85063`, `button`, `devcmd`, `maint` server, `display` panel control |
 | `02_word_book_en` (via 05) | the panel bring-up that avoids `bsp_display_start()`'s PSRAM draw buffer, the checked brightness write, the boot-streak safe mode |
-| `ESP32-C6-Touch-AMOLED-1.8/18_govee_monitor` | the NimBLE observer shape — sync callback, host task, GAP discovery, little-endian address reversal |
-| `ESP32-C6-Touch-AMOLED-1.8/14_sensory_play` | that `waveshare/qmi8658` is the right component and takes the BSP's I²C bus handle |
+| `ws-ESP32-C6-Touch-AMOLED-1.8/18_govee_monitor` | the NimBLE observer shape — sync callback, host task, GAP discovery, little-endian address reversal |
+| `ws-ESP32-C6-Touch-AMOLED-1.8/14_sensory_play` | that `waveshare/qmi8658` is the right component and takes the BSP's I²C bus handle |
 | `05_dictation` (`audio_io.c`) | the I²S + ES8311 bring-up `sound.c` is built on — 16 kHz mono, verified on this board |
 | new here | `census`, `wifiscan`, `blescan`, `imu`, `sound`, `srec`, the log management in `sdlog`, eject in `sdcard`, the status screen, the export routes, `tools/locate.py` |
 
