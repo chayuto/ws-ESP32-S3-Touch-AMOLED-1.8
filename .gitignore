@@ -41,3 +41,6 @@ docs/internal/
 logs/
 projects/*/logs/
 projects/*/assets/book/
+
+# Data pulled off the card by 06_sensorous/tools/extract.sh — reproducible from the board
+projects/*/data/

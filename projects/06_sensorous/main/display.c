@@ -122,6 +122,16 @@ void display_panel_reinit(void)
 
 #define DRAW_LINES 20 /* 368 x 20 x 2 = 14,720 B, internal DMA */
 
+/* Snap every invalidated area to the 2x2 grid the panel addresses in. */
+static void rounder_event_cb(lv_event_t *e)
+{
+    lv_area_t *area = (lv_area_t *)lv_event_get_param(e);
+    area->x1 = (area->x1 >> 1) << 1;
+    area->y1 = (area->y1 >> 1) << 1;
+    area->x2 = ((area->x2 >> 1) << 1) + 1;
+    area->y2 = ((area->y2 >> 1) << 1) + 1;
+}
+
 lv_display_t *display_start(void)
 {
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -152,6 +162,19 @@ lv_display_t *display_start(void)
     if (disp == NULL) {
         return NULL;
     }
+
+    /* The CO5300 takes a window in pairs of pixels: a flush whose area starts on
+     * an odd column or carries an odd width lands in a window one pixel from the
+     * data, and every row after the first is drawn one further across - text
+     * comes out sheared, with the pixels it should have replaced still on the
+     * glass. The BSP knows this and attaches this rounder, but only inside
+     * bsp_display_start(), which this project does not call: that function
+     * allocates LVGL's draw buffer with MALLOC_CAP_DEFAULT and the buffer lands
+     * in PSRAM under Wi-Fi's RAM pressure, which breaks every SPI flush instead.
+     * So the display is built by hand here, and the rounder has to come with it.
+     * Reported from the glass on 2026-09-18: tilted and overwritten text.
+     * Copied from the BSP's rounder_event_cb() so the two cannot drift. */
+    lv_display_add_event_cb(disp, rounder_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
     esp_lcd_touch_handle_t tp = NULL;
     if (bsp_touch_new(NULL, &tp) == ESP_OK && tp) {
         const lvgl_port_touch_cfg_t tcfg = {.disp = disp, .handle = tp};

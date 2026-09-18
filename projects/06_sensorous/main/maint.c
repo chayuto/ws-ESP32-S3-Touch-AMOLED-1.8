@@ -21,6 +21,7 @@
 #include "maint.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -217,8 +218,15 @@ static esp_err_t file_get(httpd_req_t *r)
     snprintf(path, sizeof(path), "%s/%s", sdlog_dir(), name);
     FILE *f = fopen(path, "rb");
     if (f == NULL) {
-        httpd_resp_set_status(r, "404 Not Found");
-        return httpd_resp_sendstr(r, "no such file");
+        /* Say which errno it was. ENFILE is not a missing file - it is the mount
+         * out of descriptors - and answering "no such file" to it sent a whole
+         * extraction run looking for the wrong fault (2026-09-18). */
+        int e = errno;
+        char msg[192];
+        ESP_LOGW(TAG, "cannot open %s: %s (errno %d)", path, strerror(e), e);
+        snprintf(msg, sizeof(msg), "cannot open %s: %s (errno %d)", name, strerror(e), e);
+        httpd_resp_set_status(r, e == ENOENT ? "404 Not Found" : "500 Internal Server Error");
+        return httpd_resp_sendstr(r, msg);
     }
     if (from > 0) {
         fseek(f, from, SEEK_SET);

@@ -31,14 +31,52 @@ static void quiet_mount_logs(bool quiet)
     esp_log_level_set("ESP32-S3-Touch-AMOLED-1.8", quiet ? ESP_LOG_ERROR : ESP_LOG_INFO);
 }
 
+/* Mounted here rather than with bsp_sdcard_mount(), for one reason: the BSP
+ * hard-codes max_files = 5 and this project holds exactly five files open all
+ * the time - sensorous.log plus the four record channels. That leaves no
+ * descriptor for anything else, so the export path could list the files and
+ * then fail to open any of them: /api/file answered "no such file" for a file
+ * the same request had just listed (measured 2026-09-18, first extraction run).
+ * Nothing else about the mount differs from the BSP's - the pins, the 1-bit
+ * SDMMC width and the allocation unit are copied from it. */
+#define SDCARD_MAX_FILES 10
+
 static bool try_mount(void)
 {
+    const esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = SDCARD_MAX_FILES,
+        .allocation_unit_size = 16 * 1024,
+    };
+    const sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    const sdmmc_slot_config_t slot_config = {
+        .clk = BSP_SD_CLK,
+        .cmd = BSP_SD_CMD,
+        .d0 = BSP_SD_D0,
+        .d1 = GPIO_NUM_NC,
+        .d2 = GPIO_NUM_NC,
+        .d3 = GPIO_NUM_NC,
+        .d4 = GPIO_NUM_NC,
+        .d5 = GPIO_NUM_NC,
+        .d6 = GPIO_NUM_NC,
+        .d7 = GPIO_NUM_NC,
+        .cd = SDMMC_SLOT_NO_CD,
+        .wp = SDMMC_SLOT_NO_WP,
+        .width = 1,
+        .flags = 0,
+    };
+
     int64_t t0 = esp_timer_get_time();
-    esp_err_t err = bsp_sdcard_mount();
+    /* bsp_sdcard is the BSP's own handle; the rest of this file and the BSP's
+     * unmount both read it, so it stays the one place the card lives. */
+    esp_err_t err = esp_vfs_fat_sdmmc_mount(BSP_SD_MOUNT_POINT, &host, &slot_config, &mount_config,
+                                            &bsp_sdcard);
     int64_t ms = (esp_timer_get_time() - t0) / 1000;
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "mounted at %s in %lld ms: %s, %llu MB", BSP_SD_MOUNT_POINT, ms, bsp_sdcard->cid.name,
-                 ((uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size) / (1024 * 1024));
+        ESP_LOGI(TAG, "mounted at %s in %lld ms: %s, %llu MB, up to %d files open at once",
+                 BSP_SD_MOUNT_POINT, ms, bsp_sdcard->cid.name,
+                 ((uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size) / (1024 * 1024),
+                 SDCARD_MAX_FILES);
         s_mounts++;
         /* Before the refresh, not after: sdcard_refresh_space() returns 0/0 unless
          * the card already counts as present, and the callers only assign s_present
