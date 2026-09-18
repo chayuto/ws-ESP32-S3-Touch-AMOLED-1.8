@@ -157,3 +157,34 @@ I (22233) sensorous: heartbeat: mode stationary, 1 scans, wifi 23/512 ble 24/102
 Steady state, stationary, on USB: 30.4 KB internal free and flat, 7.88 MB PSRAM
 free, worst main-loop turn 339 ms (the 200 ms mic burst plus the record write),
 Wi-Fi sweep 2.20 s, BLE window 4.01 s, 360 sensor records an hour.
+
+## The stability run, 2026-09-18
+
+40 minutes stationary on USB, ending 2,300 s of uptime. Every check in `vv.py`
+passed on the files it produced.
+
+| | |
+|---|---|
+| Uptime | monotonic across 66 heartbeats — no reset, no panic, no watchdog |
+| Records | 239 sensor (357/hour against 360 expected), 38 scan cycles, 847 AP rows, 949 BLE rows |
+| Internal heap | 30,351 B free, **drift 0 B** over an 11-minute window; sawtooth of 516 B per record |
+| PSRAM | 7.88 MB free, drift 0 B |
+| Main loop | worst turn 278–335 ms, bounded |
+| Card | 13,492 MB free unchanged, 0 dropped log lines, 0 I/O errors |
+| Temperature | 35.7–41.7 °C, against a 60 °C first guard step |
+| IMU rate | median 101 Hz, one window in 239 at 75 Hz |
+
+Two things the run showed that are worth knowing:
+
+- **The tightest moment for internal RAM is a scan, not maintenance mode.** The
+  low-water mark was 17,395 B, and it was set during a scan cycle in stationary
+  mode — maintenance mode sits at a steady 19,175 B free. So the Wi-Fi sweep and
+  the BLE window together are the worst case, and the headroom there is ~17 KB.
+  Anything new that allocates internal RAM has to be measured against that number,
+  not against the 30 KB the board shows at rest.
+- **One Wi-Fi sweep in 59 came back empty** — 0 APs in 602 ms where every other
+  sweep heard about 24 — around a maintenance-mode switch, so probably a scan cut
+  short by the mode change rather than a spontaneous fault. It is written into
+  `radio.jsonl` as an ordinary scan with no APs, which analysis cannot tell apart
+  from a genuinely empty place. `vv.py` now fails a run that contains one. The
+  firmware should log a warning when a sweep hears nothing; it does not yet.

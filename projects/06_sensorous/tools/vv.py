@@ -216,6 +216,16 @@ if radio:
     if ends:
         check(not any(e.get("wifi_full") or e.get("ble_full") for e in ends),
               "no census table overflowed")
+        # A sweep that hears nothing where every other sweep hears two dozen APs
+        # did not scan - it was cut short. It writes an empty scan into the
+        # location data, which is worse than no scan at all, because analysis
+        # cannot tell the two apart. Seen once in 59 sweeps on 2026-09-18
+        # (602 ms, 0 APs), around a maintenance-mode switch.
+        typical = sorted(e["wifi_n"] for e in ends)[len(ends) // 2]
+        empty = [e for e in ends if e["wifi_n"] == 0 and typical > 0]
+        check(not empty, "no Wi-Fi sweep came back empty",
+              f"{len(empty)} of {len(ends)} heard nothing where the median hears {typical}"
+              + (f" (seq {empty[0]['seq']}, {empty[0]['wifi_ms']} ms)" if empty else ""))
         wms = [e["wifi_ms"] for e in ends]
         bms = [e["ble_ms"] for e in ends]
         check(max(bms) < 6000, "BLE windows close on time", f"worst {max(bms)} ms")

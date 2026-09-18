@@ -36,7 +36,7 @@ sleep 1
 leave() {
   "$ATTACH" m "$PORT" >/dev/null 2>&1
   for i in {1..15}; do
-    grep -q "maintenance down" "$TAP" 2>/dev/null && { echo "maintenance down, scanning resumed"; return }
+    grep -aq "maintenance down" "$TAP" 2>/dev/null && { echo "maintenance down, scanning resumed"; return }
     sleep 1
   done
   echo "WARNING: the board did not confirm it left maintenance - check it" >&2
@@ -45,19 +45,31 @@ leave() {
 echo "asking for maintenance mode..."
 "$ATTACH" m "$PORT" >/dev/null 2>&1
 
+IP_WAIT_S=75
 IP=""
-for i in {1..30}; do
-  IP=$(grep -o "maintenance up at http://[0-9.]*" "$TAP" 2>/dev/null | tail -1 | sed 's|.*http://||')
-  [ -n "$IP" ] && break
+for i in {1..$IP_WAIT_S}; do
+  IP=$(grep -ao "maintenance up at http://[0-9.]*" "$TAP" 2>/dev/null | tail -1 | sed 's|.*http://||')
+  [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+  IP=""
   # 'm' toggles: if the board was already in maintenance we just switched it off.
-  if grep -q "maintenance down" "$TAP" 2>/dev/null; then
+  if grep -aq "maintenance down" "$TAP" 2>/dev/null; then
     echo "it was already in maintenance; asking again"
     : > "$TAP"
     "$ATTACH" m "$PORT" >/dev/null 2>&1
   fi
   sleep 1
 done
-[ -n "$IP" ] || { echo "the board never came up on Wi-Fi - is it configured for this network?" >&2; cleanup; exit 3 }
+if [ -z "$IP" ]; then
+  # Leave maintenance even though there is nothing to download. Maintenance mode
+  # stops scanning, so an early exit here used to walk away from a board that had
+  # given up recording - the firmware's ten-minute idle timeout was the only thing
+  # that recovered it (2026-09-18). Say what the console showed, too.
+  echo "the board never came up on Wi-Fi within ${IP_WAIT_S}s. Last console lines:" >&2
+  tail -6 "$TAP" >&2
+  leave
+  cleanup
+  exit 3
+fi
 echo "board is at http://$IP/"
 
 LIST=$(curl -s --max-time 20 "http://$IP/api/files") || { echo "could not list files" >&2; leave; cleanup; exit 4 }
