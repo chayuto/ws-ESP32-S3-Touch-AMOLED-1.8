@@ -119,7 +119,7 @@ ws-ESP32-S3-Touch-AMOLED-1.8/
 | `01_project_template` | The scaffold. BSP init, display, touch, LVGL 9 screen with a tap counter, heap heartbeat. | yes — display, touch registration, 240 MHz, stable heap |
 | `02_word_book_en` | First application: voice-triggered picture book on ESP-SR. Built in milestones; see `docs/design/02_word_book_en.md`. | M0–M2 and M4 done 2026-09-05: audio, continuous MultiNet7 (no wake word), word → card → chime loop, dimming, silent tap-to-wake. Live adult speech 5/5 and the chime confirmed by a person. M3 on the child, the SD/photo path and a tap remain |
 | `05_dictation` | Offline speech to text on the glass; see `docs/design/05_dictation.md`. | MX-1 and MX-2 answered on hardware 2026-09-06/07. `raw_string` is dead; MultiNet streams in English, and the Mandarin route is closed by an esp-sr limit. **Paused.** |
-| `06_sensorous` | Logs every onboard sensor — IMU, ambient sound level, temperatures, power — plus the whole radio environment (Wi-Fi + BLE MACs and RSSI) to the card, with NTP timestamps, log rotation, safe eject and Wi-Fi export; see `docs/design/06_sensorous.md`. | **no** — M0 only: builds clean at 240 MHz with Wi-Fi and NimBLE both resident, 1.65 MB image. Nothing run on hardware yet |
+| `06_sensorous` | Logs every onboard sensor — IMU, ambient sound level, temperatures, power — plus the whole radio environment (Wi-Fi + BLE MACs and RSSI) to the card, with NTP timestamps, log rotation, safe eject and Wi-Fi export; see `docs/design/06_sensorous.md`. | yes — M1 and M4 done 2026-09-18: IMU, mic, both radios, records on the card, and 735 KB pulled off over Wi-Fi with the card never leaving the slot. Six faults found and fixed on the day; `tools/vv.py` checks a run, `tools/extract.sh` fetches it |
 
 ## ESP-IDF Environment
 
@@ -281,6 +281,32 @@ their reasons, self-tests that print PASS/FAIL, a serial `d` to open the floodga
   every task that logs; a 512-byte stack buffer overflowed the 2.3 KB system event task
   the moment DEBUG lines were compiled in. Static buffer under esp_log's lock, and
   `CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096`.
+- **Never put `%f` in an LVGL format string.** LVGL is built with its own printf
+  (`CONFIG_LV_USE_BUILTIN_SPRINTF=y`) and without float support (`CONFIG_LV_USE_FLOAT`
+  is not set), so `%f` is not a conversion it knows: it prints the letter and **leaves
+  the `double` on the argument list**, and the next `%s` reads the float's bytes as a
+  pointer. That is a `LoadProhibited` panic in `lv_strnlen` at `EXCVADDR 0xa0000000`,
+  and it killed `06_sensorous`'s first boot on 2026-09-18. Format floats with the C
+  library's `snprintf` into a buffer and pass the finished string to
+  `lv_label_set_text()`. This applies to every project here.
+- **A hand-built display needs the CO5300 area rounder.** The panel addresses its window
+  in pairs of pixels. A flush whose area starts on an odd column, or carries an odd
+  width, lands one pixel away from its data and every row after the first walks further
+  across — **text comes out sheared, with what it should have replaced still on the
+  glass** (seen 2026-09-18). The BSP has a rounder for this but attaches it inside
+  `bsp_display_start()`, which none of our Wi-Fi projects call (see the draw-buffer rule
+  above). After `lvgl_port_add_disp()`, add:
+  `lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL)` snapping
+  `x1`/`y1` down to even and `x2`/`y2` up to odd — `display.c` in `06_sensorous` has it.
+  `02_word_book_en` and `05_dictation` are still missing it; they draw full-screen
+  images, whose areas are already even, which is why it has not shown there.
+- **`bsp_sdcard_mount()` allows only five open files.** `max_files = 5` is hard-coded in
+  the BSP with no way to configure it. `06_sensorous` holds exactly five open (its log
+  and four record channels), so every other `fopen` failed — the HTTP export listed the
+  files and then answered "no such file" for each one (2026-09-18). A project that opens
+  more than a couple of files should mount with `esp_vfs_fat_sdmmc_mount()` and its own
+  `max_files`, copying the BSP's pins and 1-bit width; `06_sensorous/main/sdcard.c` does.
+  And report `errno` when `fopen` fails: `ENFILE` and `ENOENT` need different fixes.
 - **Touch LVGL only under the lock.** `bsp_display_lock(timeout_ms)` /
   `bsp_display_unlock()` around every LVGL call made outside an LVGL event callback.
   The LVGL task runs on its own; unlocked access from another task will corrupt it.
@@ -484,7 +510,13 @@ Honest list, so nobody builds on an assumption:
 - ~~Wi-Fi (STA)~~ — joins the home network in ~7 s and NTP syncs (`02_word_book_en`).
   Linking it costs ~55 KB of internal RAM even after `esp_wifi_deinit()` (166 → 110 KB
   free), so it is brought up once at boot, before the recogniser, and torn down.
-- **IMU** — `WHO_AM_I` and address confirmed only; no readings taken.
+- ~~IMU~~ — read continuously at 100 Hz in `06_sensorous` (2026-09-18): gravity on the
+  resting axis, tilt, and knocks all register. One caveat, measured: **this part reads
+  about 3.8 % high.** At rest \|a\| is 10.178 m/s² where gravity is 9.807, stable across
+  records, and the QMI8658 driver's scale (4096 LSB/g at ±8 g, × 9.80665) is correct —
+  so it is the sensor's own uncalibrated error, not the maths. Consequence: any metric
+  built as \|a\| − 1 g carries a floor of ~0.37 m/s² and cannot read zero on a still
+  board. Calibrate against a resting baseline before treating it as absolute.
 - **AXP2101 rails** — `CHIP_ID` read only; no rail configured or measured.
 - **Battery operation** — never run off the MX1.25 connector.
 - **Wi-Fi as an AP.** Tried in `02_word_book_en` on 2026-09-05: the AP started, the

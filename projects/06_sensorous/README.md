@@ -7,9 +7,12 @@ earshot, with RSSI.
 
 Design note: [`docs/design/06_sensorous.md`](../../docs/design/06_sensorous.md).
 
-**Status: first pass, compiles, never run.** The board was not available when
-this was written, so nothing here has been flashed. Everything below about
-runtime behaviour is intent until a boot log backs it.
+**Status: runs on hardware.** First flashed 2026-09-18 on the V2 board with a
+16 GB card in the slot; six faults found and fixed that day (see the git log for
+what each one was). The IMU, the microphone, both radios, the card and the Wi-Fi
+export are all confirmed. What has *not* been exercised: rotation at the file
+cap, retention deleting a generation, a card pulled without an eject, battery
+operation, and `locate.py` against Google with a real key.
 
 ## Build and flash
 
@@ -18,7 +21,7 @@ runtime behaviour is intent until a boot log backs it.
 idf.py -C projects/06_sensorous -B /tmp/ws-amoled-build/06_sensorous \
   -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.local" build
 idf.py -C projects/06_sensorous -B /tmp/ws-amoled-build/06_sensorous \
-  -p /dev/cu.usbmodem3101 flash
+  -p /dev/cu.usbmodem101 flash
 ```
 
 Wi-Fi credentials go in `sdkconfig.defaults.local` (gitignored). They are used
@@ -105,6 +108,52 @@ a position.
 
 Nothing is uploaded from the board itself, ever.
 
+## Getting a run out and checking it
+
+Two commands, and neither of them opens the card slot:
+
+```zsh
+tools/extract.sh          # maintenance mode, download everything, back to work
+tools/vv.py               # check what came off: PASS/FAIL per claim, exit 1 on any fail
+```
+
+`extract.sh` is incremental — run it again and it fetches only the bytes written
+since last time and appends them, so a long run can be sampled as it goes. It
+puts the files in `data/` (gitignored) along with the live census tables and the
+metrics endpoint. `vv.py` reads the most recent boot by default; `--all` reads
+every boot in the files.
+
+## Units, so nothing is read as something it is not
+
+- **Acceleration is m/s², not g.** `imu.c` puts the QMI8658 driver in m/s² mode,
+  so `amag` at rest is gravity, 9.807 — and `dyn_rms`/`dyn_peak` are
+  `|a| − 9.80665`, in m/s². **Measured on this unit: the part reads 3.8 % high**
+  (10.178 at rest), which is the sensor's own uncalibrated error, not the maths.
+  So `dyn_rms` has a floor of about 0.37 and never reaches zero on a still board.
+  Subtract a resting baseline before treating it as absolute.
+- **Gyro is degrees per second**, temperatures are degrees C of the die, RSSI is
+  dBm, and sound is dBFS (see above — not dB SPL).
+
 ## Verified serial output
 
-Nothing yet. This section gets the first clean boot log, per repo convention.
+A healthy boot, 2026-09-18, after the fixes (the two warnings are the ones
+`CLAUDE.md` documents as expected on this board):
+
+```
+I (676) imu: QMI8658 up: WHO_AM_I 0x05, +-8 g, +-512 dps, sampling at 100 Hz (chip ODR 125 Hz)
+I (687) sdcard: mounted at /sdcard in 55 ms: SL16G, 15193 MB, up to 10 files open at once
+I (715) sensorous: recording to /sdcard/sensorous, 13492 of 15174 MB free
+I (953) display: panel up: brightness init ESP_OK
+I (5209) time: clock set from NTP (pool.ntp.org): 2026-09-18 07:10:27
+I (7774) sound: ready: 16000 Hz mono, gain 30 dB, 200 ms bursts after a 50 ms settle. First reading -37.3 dBFS
+I (7788) blescan: ready in 8 ms: passive scan, 4000 ms windows, 192 devices per window
+I (13857) wifiscan: sweep 1: 23 APs in 2203 ms, 23 new, 23 known
+I (17863) blescan: window 1: 24 devices in 4005 ms, 24 new, 24 known, 185 adverts total
+I (22233) sensorous: heartbeat: mode stationary, 1 scans, wifi 23/512 ble 24/1024, records 2+49+1,
+          card in 13492 MB, internal 30895 B (min 30379), psram 7882188 B, board 38.7 C,
+          loop max 309 ms over 41 turns, drops 0
+```
+
+Steady state, stationary, on USB: 30.4 KB internal free and flat, 7.88 MB PSRAM
+free, worst main-loop turn 339 ms (the 200 ms mic burst plus the record write),
+Wi-Fi sweep 2.20 s, BLE window 4.01 s, 360 sensor records an hour.

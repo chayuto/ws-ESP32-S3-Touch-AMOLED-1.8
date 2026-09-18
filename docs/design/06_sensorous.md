@@ -1,9 +1,8 @@
 # 06_sensorous — measure everything, write it down
 
-*Design note, 2026-09-09.*
-*Status: **first pass, compiles, never run.** The board was not available this*
-*session, so nothing here has been flashed. Every claim below about behaviour is*
-*design intent until a boot log backs it — M1 is the first boot.*
+*Design note, 2026-09-09. First run on hardware 2026-09-18.*
+*Status: **M1 and M4 answered on hardware 2026-09-18.** What follows is what the*
+*board does, except where it says otherwise.*
 
 ## What it is
 
@@ -251,10 +250,10 @@ fields per access point, never SSIDs, never Bluetooth, never sound, never a file
 | | What | State |
 |---|---|---|
 | **M0** | Scaffold: carried modules wired, builds clean, 240 MHz, BT+Wi-Fi resident | **done** — 1.58 MB image, 62 % of the app partition free |
-| **M1** | First boot: does it run? IMU answers, the mic burst returns a sane level, both radios scan, records land on the card | **not started** — needs hardware |
-| **M2** | Memory and timing: internal RAM with both stacks up, worst loop turn, sweep and window durations, records per hour | not started |
+| **M1** | First boot: does it run? IMU answers, the mic burst returns a sane level, both radios scan, records land on the card | **done** 2026-09-18 — after six fixes. All four answer yes; `tools/vv.py` checks them from the files |
+| **M2** | Memory and timing: internal RAM with both stacks up, worst loop turn, sweep and window durations, records per hour | **measured** 2026-09-18, not yet analysed: 30.4 KB internal free (flat over 8 min), 7.88 MB PSRAM, worst loop turn 339 ms, Wi-Fi sweep 2.20 s, BLE window 4.01 s, 360 sensor records/hour stationary |
 | **M3** | The card under stress: rotation at the cap, retention deleting, eject/reinsert live, a card pulled without an eject | not started |
-| **M4** | Export: a whole file over HTTP, resumed download, `locate.py` against a real `radio.jsonl` with a key | not started |
+| **M4** | Export: a whole file over HTTP, resumed download, `locate.py` against a real `radio.jsonl` with a key | **mostly done** 2026-09-18 — 735 KB of all five files over HTTP, and resumed downloads, via `tools/extract.sh`. `locate.py` against Google with a key is still untested |
 | **M5** | A real run: a night stationary, then carried, both on battery. Drain, drift, and whether the fixes agree with where it was | not started |
 
 ## Open questions, honestly

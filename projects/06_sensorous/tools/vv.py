@@ -163,9 +163,9 @@ if sensors:
 
     heap = [r["heap"]["int_free"] for r in sensors if r.get("heap")]
     if len(heap) > 3:
-        drift = heap[0] - heap[-1]
+        drift = heap[-1] - heap[0]  # negative means the heap shrank over the run
         check(abs(drift) < 8192, "internal heap is not draining",
-              f"{heap[0]} -> {heap[-1]} B ({drift:+d} over {span_s(sensors)/60:.1f} min)")
+              f"{heap[0]} -> {heap[-1]} B ({drift:+d} B over {span_s(sensors)/60:.1f} min)")
         check(min(heap) > 12000, "internal heap keeps headroom", f"low water {min(heap)} B")
 
     cards = [r["card"] for r in sensors if r.get("card")]
