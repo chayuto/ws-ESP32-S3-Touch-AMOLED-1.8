@@ -106,7 +106,16 @@ static bool mic_open(void)
         .sample_rate = SAMPLE_RATE_HZ,
         .mclk_multiple = 256,
     };
-    if (esp_codec_dev_open(s_mic, &fs) != ESP_CODEC_DEV_OK) {
+    /* esp_codec_dev_open() disables the I2S channel before configuring it, and
+     * the channel is already disabled because the last burst closed it. The
+     * driver logs "i2s_channel_disable(): the channel has not been enabled yet"
+     * at E for that, once per burst - six times a minute into the card log, for
+     * a condition this code creates on purpose. Muted across the open only, so
+     * a real I2S error during a read still reaches the log. */
+    esp_log_level_set("i2s_common", ESP_LOG_NONE);
+    esp_err_t open_err = esp_codec_dev_open(s_mic, &fs);
+    esp_log_level_set("i2s_common", ESP_LOG_INFO);
+    if (open_err != ESP_CODEC_DEV_OK) {
         return false;
     }
     esp_codec_dev_set_in_gain(s_mic, (float)CONFIG_SENSOROUS_MIC_GAIN_DB);

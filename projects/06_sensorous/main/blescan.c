@@ -73,6 +73,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     (void)arg;
 
     if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
+        ESP_LOGD(TAG, "DISC_COMPLETE, reason %d", event->disc_complete.reason);
         s_scanning = false;
         xSemaphoreGive(s_done);
         return 0;
@@ -252,18 +253,26 @@ int blescan_window(int ms, blescan_dev_cb_t cb, void *ctx)
     };
 
     int64_t t0 = esp_timer_get_time();
-    int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, ms, &p, gap_event_cb, NULL);
+    /* BLE_HS_FOREVER, and this task ends the window, because NimBLE's own
+     * duration timer does not fire here. Measured on hardware 2026-09-18, IDF
+     * v5.5.3: ble_gap_disc(..., 4000, ...) logs "duration=4000ms", scans, and is
+     * still discovering when asked 5 s later - ble_gap_disc_cancel() returns 0,
+     * which it only does for a scan that was actually running. Every window cost
+     * a 1 s backstop and a warning. Closing it from here makes the window exactly
+     * as long as it says it is, and DISC_COMPLETE is still honoured below in case
+     * the host ends the scan by itself (a host reset, say). */
+    int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p, gap_event_cb, NULL);
     if (rc != 0) {
         ESP_LOGW(TAG, "ble_gap_disc: %d", rc);
         return -1;
     }
     s_scanning = true;
 
-    /* The controller ends the window itself; the timeout is a backstop so a lost
-     * DISC_COMPLETE cannot hang the whole sense loop. */
-    if (xSemaphoreTake(s_done, pdMS_TO_TICKS(ms + 1000)) != pdTRUE) {
-        ESP_LOGW(TAG, "window did not complete on its own; cancelling");
-        ble_gap_disc_cancel();
+    if (xSemaphoreTake(s_done, pdMS_TO_TICKS(ms)) != pdTRUE) {
+        int crc = ble_gap_disc_cancel();
+        if (crc != 0 && crc != BLE_HS_EALREADY) {
+            ESP_LOGW(TAG, "could not stop the scan: rc %d; the radio may still be listening", crc);
+        }
         s_scanning = false;
     }
 

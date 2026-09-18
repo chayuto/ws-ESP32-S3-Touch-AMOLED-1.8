@@ -297,11 +297,23 @@ void display_update(const display_status_t *st)
     lv_label_set_text(s_mode, st->mode ? st->mode : "?");
     lv_label_set_text(s_clock, st->clock ? st->clock : "unset");
 
+    /* Every line with a float in it is formatted with the C library's snprintf
+     * and handed over as a finished string. LVGL's own printf is the builtin
+     * one (CONFIG_LV_USE_BUILTIN_SPRINTF=y) and it is compiled without float
+     * support (CONFIG_LV_USE_FLOAT is not set), so lv_label_set_text_fmt()
+     * does not consume the double for a %f - it prints the letter and leaves
+     * the argument on the list. The next %s then reads the float's bytes as a
+     * pointer. That is a LoadProhibited panic at EXCVADDR 0xa0000000, and it
+     * killed the first boot of this project on 2026-09-18, in this function,
+     * on the line below. Do not put a %f back into an LVGL format string. */
+    char line[96];
+
     /* One line for power, because on a battery device it is the number that
      * decides whether the run finishes. */
-    lv_label_set_text_fmt(s_power, "%d%% %s   %.0f C%s%s", st->batt_pct,
-                          st->charging ? "charging" : (st->vbus ? "on USB" : "on battery"), (double)st->board_c,
-                          st->ip ? "   " : "", st->ip ? st->ip : "");
+    snprintf(line, sizeof line, "%d%% %s   %.0f C%s%s", st->batt_pct,
+             st->charging ? "charging" : (st->vbus ? "on USB" : "on battery"), (double)st->board_c,
+             st->ip ? "   " : "", st->ip ? st->ip : "");
+    lv_label_set_text(s_power, line);
 
     lv_label_set_text_fmt(s_wifi_big, "%u", (unsigned)st->wifi_known);
     if (st->wifi_last >= 0) {
@@ -317,8 +329,9 @@ void display_update(const display_status_t *st)
     }
 
     if (st->imu_ok) {
-        lv_label_set_text_fmt(s_imu, "tilt %+.0f / %+.0f   motion %.2f", (double)st->imu_pitch,
-                              (double)st->imu_roll, (double)st->imu_dyn);
+        snprintf(line, sizeof line, "tilt %+.0f / %+.0f   motion %.2f", (double)st->imu_pitch,
+                 (double)st->imu_roll, (double)st->imu_dyn);
+        lv_label_set_text(s_imu, line);
     } else {
         lv_label_set_text(s_imu, "IMU absent");
     }
@@ -326,7 +339,8 @@ void display_update(const display_status_t *st)
     /* dBFS, so the numbers are negative and quiet is more negative. Saying the
      * unit on the glass stops anyone reading it as decibels SPL. */
     if (st->sound_ok) {
-        lv_label_set_text_fmt(s_sound, "sound %.0f dBFS", (double)st->sound_dbfs);
+        snprintf(line, sizeof line, "sound %.0f dBFS", (double)st->sound_dbfs);
+        lv_label_set_text(s_sound, line);
     } else {
         lv_label_set_text(s_sound, "sound --");
     }

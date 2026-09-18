@@ -40,6 +40,12 @@ static bool try_mount(void)
         ESP_LOGI(TAG, "mounted at %s in %lld ms: %s, %llu MB", BSP_SD_MOUNT_POINT, ms, bsp_sdcard->cid.name,
                  ((uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size) / (1024 * 1024));
         s_mounts++;
+        /* Before the refresh, not after: sdcard_refresh_space() returns 0/0 unless
+         * the card already counts as present, and the callers only assign s_present
+         * from this function's return value. Getting this backwards made every
+         * record and the card line on the glass say "0 MB free" on a 15 GB card
+         * until sdlog's five-minute check happened to run (2026-09-18). */
+        s_present = true;
         sdcard_refresh_space();
         return true;
     }
